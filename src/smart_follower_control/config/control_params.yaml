@@ -1,0 +1,88 @@
+/**:
+  ros__parameters:
+    person_pose_topic: person_pose
+    follow_command_topic: follow_command
+
+follower_controller_node:
+  ros__parameters:
+    cmd_vel_follow_topic: cmd_vel_follow
+    control_rate: 20.0
+    target_distance: 1.0
+    theta_deadzone: 0.03
+    pid_r:
+      kp: 0.8
+      ki: 0.0
+      kd: 0.1
+    pid_t:
+      kp: 1.2
+      ki: 0.0
+      kd: 0.1
+    pid_i_limit: 0.5
+    pid_kaw: 0.2
+    limits:
+      v_max: 0.6
+      w_max: 1.2
+      dv_max: 0.5
+      dw_max: 1.5
+
+obstacle_avoidance_node:
+  ros__parameters:
+    left_range_topic: left_ultrasonic/range
+    right_range_topic: right_ultrasonic/range
+    depth_topic: /camera/depth/image_raw
+    cmd_vel_input_topic: /cmd_vel
+    cmd_vel_avoid_topic: cmd_vel_avoid
+    rate: 20.0
+    d_min: 0.12
+    t_react: 0.20
+    a_brake: 0.8
+    margin: 0.08
+    exit_margin: 0.08
+    depth_roi_width_ratio: 0.40
+    depth_roi_height_ratio: 0.35
+    depth_percentile: 0.05
+    turn_speed: 0.5
+    slow_turn_speed: 0.25
+    back_speed: -0.15
+
+arbiter_node:
+  ros__parameters:
+    cmd_vel_follow_topic: cmd_vel_follow
+    cmd_vel_avoid_topic: cmd_vel_avoid
+    cmd_vel_topic: /cmd_vel
+    publish_rate: 20.0
+    lost_time_normal_max: 0.2
+    lost_time_degraded_max: 0.6
+    lost_time_search_max: 2.0
+    degraded_linear_scale: 0.5
+    search_angular_speed: 0.3
+    avoid_enter_threshold: 3
+    avoid_exit_threshold: 5
+    avoid_exit_hysteresis_time: 0.2
+    avoid_cmd_timeout: 0.2
+    avoid_nonzero_epsilon: 0.001
+
+ultrasonic_range_node:
+  ros__parameters:
+    rate: 10.0
+    window_size: 5
+    min_range: 0.03
+    max_range: 3.0
+    left:
+      trig_pin: 23
+      echo_pin: 24
+      topic: left_ultrasonic/range
+    right:
+      trig_pin: 27
+      echo_pin: 22
+      topic: right_ultrasonic/range
+    frame_left: ultrasonic_left_link
+    frame_right: ultrasonic_right_link
+
+keyboard_command_node:
+  ros__parameters:
+    follow_command_topic: follow_command
+    key_lock: l
+    key_unlock: u
+    key_reset: r
+    key_estop: q

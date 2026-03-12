@@ -1,0 +1,53 @@
+perception_node:
+  ros__parameters:
+    color_topic: /camera/color/image_raw
+    depth_topic: /camera/depth/image_raw
+    camera_info_topic: /camera/color/camera_info
+    person_pose_topic: person_pose
+    follow_command_topic: follow_command
+    base_frame: base_footprint
+
+    yolo:
+      model_path: models/yolo26n.onnx
+      input_w: 640
+      input_h: 480
+      person_class_id: 0
+      conf_threshold: 0.25
+
+    reid:
+      model_path: models/reid_mobilenetv2_128.onnx
+      input_w: 64
+      input_h: 128
+      ema_alpha: 0.2
+      recover_threshold: 0.65
+
+    sync_slop: 0.04
+    detect_every_n_frames: 3
+    min_confirm_hits: 3
+    max_miss_frames: 10
+    feature_buffer_size: 20
+    memory_sec: 30.0
+
+    tracking:
+      low_score_threshold: 0.1
+      high_score_threshold: 0.5
+      assignment_threshold: 0.7
+      second_stage_threshold: 0.8
+      depth_gate_m: 1.0
+      depth_norm_m: 2.0
+      weights:
+        iou: 0.3
+        center: 0.2
+        depth: 0.1
+        appearance: 0.4
+
+    depth:
+      min_m: 0.2
+      max_m: 4.0
+
+    lock:
+      stable_frames: 5
+      hold_sec: 0.6
+      switch_sec: 2.0
+      center_roi_ratio: 0.6
+      target_area_ratio: 0.04
