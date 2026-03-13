@@ -10,5 +10,5 @@ sensor_msgs/RegionOfInterest bbox
 geometry_msgs/Point position
 geometry_msgs/Vector3 velocity
 float32 depth_m
-float32[128] appearance_feature
+float32[2048] appearance_feature
 builtin_interfaces/Time last_seen

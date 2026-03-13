@@ -17,7 +17,7 @@
 
 ## 1. 当前版本
 
-- **版本标签：`alpha-0.0.1`**
+- **版本标签：`alpha-0.0.1.1`**
 - 状态：Alpha（完成主链路框架与基础联调，适合开发调试）
 
 ---
@@ -64,7 +64,7 @@ ros2_smart_follower/
 - RGB + Depth + CameraInfo 同步（ApproximateTime）
 - YOLO 人体检测（检测帧执行）
 - 卡尔曼 + 匈牙利匹配两阶段跟踪
-- ReID 特征提取（128维）与 EMA 更新
+- ReID 特征提取（ResNet50，2048维）与 EMA 更新
 - 深度中心窗口中值采样（mm→m）
 - 像素坐标 + 深度投影到 3D，并通过 TF 变换到 `base_footprint`
 - 发布 `PersonPoseArray`（全目标 + lock_id/lock_state）
@@ -124,13 +124,39 @@ ros2_smart_follower/
 
 运行前建议准备：
 - `models/yolo26n.onnx`
-- `models/reid_mobilenetv2_128.onnx`
+- `models/reid_resnet50_2048.onnx`
 
 可使用：
 - `src/smart_follower_perception/scripts/export_yolo_onnx.py`
+- `src/smart_follower_perception/scripts/train_reid_resnet50.py`
 - `src/smart_follower_perception/scripts/export_reid_onnx.py`
+- `src/smart_follower_perception/scripts/validate_reid_onnx.py`
 
-> 导出脚本属于离线工具链（Python），运行时核心节点仍为 C++。
+> 离线训练/导出工具链基于 Python（参考 `yolo-reid-training-demo-master`），运行时核心节点仍为 C++ + ONNX Runtime。
+
+### 5.1 ReID（ResNet50-2048）离线流程
+
+```bash
+# 1) 训练/续训（Market1501）
+python3 src/smart_follower_perception/scripts/train_reid_resnet50.py \
+  --data-root reid-data --resume log/resnet50/model/model.pth.tar-30
+
+# 2) 导出 ONNX
+python3 src/smart_follower_perception/scripts/export_reid_onnx.py \
+  --weights log/resnet50/model/model.pth.tar-60 \
+  --output models/reid_resnet50_2048.onnx
+
+# 3) 导出验收（输入/输出维度+随机推理）
+python3 src/smart_follower_perception/scripts/validate_reid_onnx.py \
+  --model models/reid_resnet50_2048.onnx
+```
+
+### 5.2 回滚到旧 ReID 模型
+
+若需回滚，可将 `perception_params.yaml` 中：
+- `reid.model_path` 改回旧模型路径
+- `reid.input_w / reid.input_h` 改回旧输入尺寸
+并重新编译消息与节点。
 
 ---
 
@@ -239,4 +265,4 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 ## 14. 维护者
 
 - 项目维护：`gdutwattbit`
-- 版本起点：`alpha-0.0.1`
+- 版本起点：`alpha-0.0.1.1`

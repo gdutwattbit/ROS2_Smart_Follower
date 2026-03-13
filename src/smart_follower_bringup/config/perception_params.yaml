@@ -1,4 +1,4 @@
-perception_node:
+﻿perception_node:
   ros__parameters:
     color_topic: /camera/color/image_raw
     depth_topic: /camera/depth/image_raw
@@ -15,11 +15,11 @@ perception_node:
       conf_threshold: 0.25
 
     reid:
-      model_path: models/reid_mobilenetv2_128.onnx
-      input_w: 64
-      input_h: 128
+      model_path: models/reid_resnet50_2048.onnx
+      input_w: 128
+      input_h: 256
       ema_alpha: 0.2
-      recover_threshold: 0.65
+      recover_threshold: 0.70
 
     sync_slop: 0.04
     detect_every_n_frames: 3

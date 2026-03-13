@@ -18,7 +18,7 @@ struct Detection
   cv::Rect2f bbox;
   float confidence{0.0F};
   float depth_m{0.0F};
-  std::array<float, 128> feature{};
+  std::array<float, 2048> feature{};
   bool feature_valid{false};
 };
 
@@ -54,7 +54,7 @@ inline double normalized_center_distance(
   return std::max(0.0, std::min(1.0, static_cast<double>(d)));
 }
 
-inline double cosine_distance(const std::array<float, 128> & a, const std::array<float, 128> & b)
+inline double cosine_distance(const std::array<float, 2048> & a, const std::array<float, 2048> & b)
 {
   double dot = 0.0;
   double na = 0.0;

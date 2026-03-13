@@ -50,7 +50,7 @@ namespace
 {
 constexpr int kStateDim = 10;
 constexpr int kMeasureDim = 4;
-constexpr int kFeatureDim = 128;
+constexpr int kFeatureDim = 2048;
 }  // namespace
 
 struct MemoryEntry
@@ -267,6 +267,8 @@ public:
     model_path_ = model_path;
     input_w_ = input_w;
     input_h_ = input_h;
+    output_dim_mismatch_ = false;
+    output_dim_error_msg_.clear();
 #ifdef HAVE_ONNXRUNTIME
     init_runtime();
 #else
@@ -281,6 +283,16 @@ public:
 #else
     return false;
 #endif
+  }
+
+  bool consume_output_dim_error(std::string & msg)
+  {
+    if (!output_dim_mismatch_) {
+      return false;
+    }
+    msg = output_dim_error_msg_;
+    output_dim_mismatch_ = false;
+    return true;
   }
 
   std::array<float, kFeatureDim> extract(const cv::Mat & bgr, const cv::Rect2f & bbox, bool & valid)
@@ -303,24 +315,42 @@ public:
     cv::cvtColor(crop, rgb, cv::COLOR_BGR2RGB);
     cv::Mat resized;
     cv::resize(rgb, resized, cv::Size(input_w_, input_h_));
-    resized.convertTo(resized, CV_32F, 1.0 / 255.0);
+
+    cv::Mat normalized;
+    resized.convertTo(normalized, CV_32F, 1.0 / 255.0);
+    constexpr std::array<float, 3> kMean{0.485F, 0.456F, 0.406F};
+    constexpr std::array<float, 3> kStd{0.229F, 0.224F, 0.225F};
 
     std::vector<float> input_tensor(3 * input_h_ * input_w_);
     for (int y = 0; y < input_h_; ++y) {
       for (int x = 0; x < input_w_; ++x) {
-        const auto pix = resized.at<cv::Vec3f>(y, x);
-        input_tensor[y * input_w_ + x] = pix[0];
-        input_tensor[input_h_ * input_w_ + y * input_w_ + x] = pix[1];
-        input_tensor[2 * input_h_ * input_w_ + y * input_w_ + x] = pix[2];
+        const auto pix = normalized.at<cv::Vec3f>(y, x);
+        const float r = (pix[0] - kMean[0]) / kStd[0];
+        const float g = (pix[1] - kMean[1]) / kStd[1];
+        const float b = (pix[2] - kMean[2]) / kStd[2];
+        input_tensor[y * input_w_ + x] = r;
+        input_tensor[input_h_ * input_w_ + y * input_w_ + x] = g;
+        input_tensor[2 * input_h_ * input_w_ + y * input_w_ + x] = b;
       }
     }
 
     std::array<int64_t, 4> input_shape{1, 3, input_h_, input_w_};
     auto mem_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-    auto input = Ort::Value::CreateTensor<float>(mem_info, input_tensor.data(), input_tensor.size(), input_shape.data(), input_shape.size());
+    auto input = Ort::Value::CreateTensor<float>(
+      mem_info,
+      input_tensor.data(),
+      input_tensor.size(),
+      input_shape.data(),
+      input_shape.size());
     std::vector<const char *> input_names{input_name_.c_str()};
     std::vector<const char *> output_names{output_name_.c_str()};
-    auto outputs = session_->Run(Ort::RunOptions{nullptr}, input_names.data(), &input, 1, output_names.data(), 1);
+    auto outputs = session_->Run(
+      Ort::RunOptions{nullptr},
+      input_names.data(),
+      &input,
+      1,
+      output_names.data(),
+      1);
     if (outputs.empty()) {
       return feat;
     }
@@ -333,7 +363,10 @@ public:
         total *= d;
       }
     }
-    if (total < kFeatureDim) {
+    if (total != kFeatureDim) {
+      output_dim_mismatch_ = true;
+      output_dim_error_msg_ = "ReID output dim mismatch, expected " +
+        std::to_string(kFeatureDim) + ", got " + std::to_string(total);
       return feat;
     }
 
@@ -375,8 +408,10 @@ private:
 #endif
 
   std::string model_path_;
-  int input_w_{64};
-  int input_h_{128};
+  int input_w_{128};
+  int input_h_{256};
+  bool output_dim_mismatch_{false};
+  std::string output_dim_error_msg_;
 #ifdef HAVE_ONNXRUNTIME
   std::unique_ptr<Ort::Env> env_;
   Ort::SessionOptions session_options_;
@@ -414,7 +449,7 @@ private:
     std::string follow_command_topic{"follow_command"};
     std::string base_frame{"base_footprint"};
     std::string yolo_model_path{"models/yolo26n.onnx"};
-    std::string reid_model_path{"models/reid_mobilenetv2_128.onnx"};
+    std::string reid_model_path{"models/reid_resnet50_2048.onnx"};
 
     int detect_every_n_frames{3};
     int min_confirm_hits{3};
@@ -434,13 +469,13 @@ private:
     float depth_min_m{0.2F};
     float depth_max_m{4.0F};
     float ema_alpha{0.2F};
-    float reid_recover_threshold{0.65F};
+    float reid_recover_threshold{0.70F};
     float lock_center_roi_ratio{0.6F};
     float lock_target_area_ratio{0.04F};
     int yolo_input_w{640};
     int yolo_input_h{480};
-    int reid_input_w{64};
-    int reid_input_h{128};
+    int reid_input_w{128};
+    int reid_input_h{256};
     int person_class_id{0};
     float yolo_conf_threshold{0.25F};
     CostWeights weights;
@@ -1159,6 +1194,11 @@ private:
 
         detections.push_back(d);
       }
+    }
+
+    std::string reid_dim_error;
+    if (reid_.consume_output_dim_error(reid_dim_error)) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "%s", reid_dim_error.c_str());
     }
 
     run_tracking(detections, color.size(), rclcpp::Time(color_msg->header.stamp));
