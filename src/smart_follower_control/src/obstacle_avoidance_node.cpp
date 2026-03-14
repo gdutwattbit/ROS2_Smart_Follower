@@ -2,6 +2,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,7 @@ public:
     declare_parameter("depth_roi_width_ratio", 0.4);
     declare_parameter("depth_roi_height_ratio", 0.35);
     declare_parameter("depth_percentile", 0.05);
+    declare_parameter("depth_sample_stride", 2);
 
     declare_parameter("turn_speed", 0.5);
     declare_parameter("slow_turn_speed", 0.25);
@@ -86,6 +88,7 @@ private:
     double depth_roi_width_ratio{0.4};
     double depth_roi_height_ratio{0.35};
     double depth_percentile{0.05};
+    int depth_sample_stride{2};
 
     double turn_speed{0.5};
     double slow_turn_speed{0.25};
@@ -98,6 +101,8 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr vel_sub_;
   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::Twist>::SharedPtr avoid_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
+  sensor_msgs::msg::Image::SharedPtr latest_depth_msg_;
+  std::mutex depth_mutex_;
   diagnostic_updater::Updater diagnostics_{this};
 
   double left_dist_{std::numeric_limits<double>::infinity()};
@@ -108,6 +113,8 @@ private:
   rclcpp::Time left_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time right_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time depth_stamp_{0, 0, RCL_ROS_TIME};
+  std::size_t depth_message_count_{0};
+  std::size_t depth_process_count_{0};
 
   void load_parameters()
   {
@@ -126,6 +133,7 @@ private:
     p_.depth_roi_width_ratio = get_parameter("depth_roi_width_ratio").as_double();
     p_.depth_roi_height_ratio = get_parameter("depth_roi_height_ratio").as_double();
     p_.depth_percentile = get_parameter("depth_percentile").as_double();
+    p_.depth_sample_stride = std::max<int>(1, static_cast<int>(get_parameter("depth_sample_stride").as_int()));
     p_.turn_speed = get_parameter("turn_speed").as_double();
     p_.slow_turn_speed = get_parameter("slow_turn_speed").as_double();
     p_.back_speed = get_parameter("back_speed").as_double();
@@ -202,6 +210,12 @@ private:
     right_sub_.reset();
     depth_sub_.reset();
     vel_sub_.reset();
+    {
+      std::lock_guard<std::mutex> lock(depth_mutex_);
+      latest_depth_msg_.reset();
+    }
+    depth_message_count_ = 0;
+    depth_process_count_ = 0;
     avoid_pub_.reset();
     return CallbackReturn::SUCCESS;
   }
@@ -209,6 +223,27 @@ private:
   void on_depth(const sensor_msgs::msg::Image::SharedPtr msg)
   {
     if (!msg) {
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(depth_mutex_);
+    latest_depth_msg_ = msg;
+    depth_message_count_ += 1;
+  }
+
+  void refresh_depth_from_latest()
+  {
+    sensor_msgs::msg::Image::SharedPtr msg;
+    {
+      std::lock_guard<std::mutex> lock(depth_mutex_);
+      msg = latest_depth_msg_;
+    }
+    if (!msg) {
+      return;
+    }
+
+    const rclcpp::Time msg_stamp(msg->header.stamp);
+    if (msg_stamp.nanoseconds() == 0 || msg_stamp.nanoseconds() == depth_stamp_.nanoseconds()) {
       return;
     }
 
@@ -235,11 +270,12 @@ private:
     const int y0 = std::max(0, (h - roi_h) / 2);
     const int x1 = std::min(w - 1, x0 + roi_w);
     const int y1 = std::min(h - 1, y0 + roi_h);
+    const int stride = std::max(1, p_.depth_sample_stride);
 
     std::vector<float> valid;
-    valid.reserve(static_cast<std::size_t>(roi_w * roi_h));
-    for (int y = y0; y <= y1; ++y) {
-      for (int x = x0; x <= x1; ++x) {
+    valid.reserve(static_cast<std::size_t>(((roi_w + stride - 1) / stride) * ((roi_h + stride - 1) / stride)));
+    for (int y = y0; y <= y1; y += stride) {
+      for (int x = x0; x <= x1; x += stride) {
         float m = 0.0F;
         if (depth.type() == CV_16UC1) {
           uint16_t mm = depth.at<uint16_t>(y, x);
@@ -261,7 +297,8 @@ private:
 
     if (!valid.empty()) {
       depth_dist_ = percentile(valid, static_cast<float>(p_.depth_percentile));
-      depth_stamp_ = rclcpp::Time(msg->header.stamp);
+      depth_stamp_ = msg_stamp;
+      depth_process_count_ += 1;
     }
   }
 
@@ -270,6 +307,8 @@ private:
     if (this->get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
       return;
     }
+
+    refresh_depth_from_latest();
 
     const auto t = now();
     const auto stale = [&](const rclcpp::Time & stamp) {
@@ -326,6 +365,9 @@ private:
     stat.add("left_dist", left_dist_);
     stat.add("right_dist", right_dist_);
     stat.add("depth_dist", depth_dist_);
+    stat.add("depth_message_count", static_cast<int>(depth_message_count_));
+    stat.add("depth_process_count", static_cast<int>(depth_process_count_));
+    stat.add("depth_sample_stride", p_.depth_sample_stride);
     stat.add("current_speed", current_speed_);
     stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Obstacle avoidance active");
   }

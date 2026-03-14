@@ -17,46 +17,37 @@
 
 ## 1. 当前版本
 
-- **发布基线：`alpha-0.0.1.1`**
-- **当前调试版：`dev-0.0.1.1`**
-- 状态：Debug（当前用于定位感知链路的输入订阅 / 三路同步 / person_pose 发布问题）
+- **当前开发版本：`alpha-0.0.1.2`**
+- **上一调试快照：`dev-0.0.1.1`**
+- 状态：In Progress（当前正在将感知同步链路从 `message_filters::ApproximateTime` 重构为“普通订阅 + 最近帧缓存 + 手工时间戳匹配”）
 
-### 1.1 dev-0.0.1.1 调试范围
+### 1.1 alpha-0.0.1.2 目标
 
-本调试版只增强 `smart_follower_perception` 的联调可观测性，不改变控制 / 仲裁接口。当前额外记录：
-
-- 原始输入探针计数：RGB / Depth / CameraInfo 是否真的收到
-- 三路同步回调计数：`ApproximateTime` 是否真的形成同步
-- `person_pose` 发布计数：同步形成后是否进入发布路径
-- 启动参数回显：YOLO / ReID 输入尺寸、topic、`sync_slop`
-
-### 1.2 dev-0.0.1.1 关键日志
-
-排查感知链路时，优先看以下日志：
-
-- `[dev-0.0.1.1] Configured perception node ...`
-  - 确认节点实际吃到的参数值，重点看 `yolo_input`、`reid_input`、`detect_every_n_frames`。
-- `[dev-0.0.1.1] input topics color=... depth=... info=... person_pose=... sync_slop=...`
-  - 确认 perception 真实订阅/发布的话题名。
-- `[dev-0.0.1.1] raw_input color=... depth=... info=... last_stamp=(...)`
-  - 只要这条日志增长，说明原始订阅已经收到三路消息。
-- `[dev-0.0.1.1] sync callback synced=... frame=... run_detect=...`
-  - 只有三路 `ApproximateTime` 真正形成后才会出现。
-- `[dev-0.0.1.1] published person_pose publish_count=... persons=...`
-  - 只要同步回调进入且 publisher 激活，就应看到这条日志，即使 `persons=0` 也应发布空数组。
-
-如果 `raw_input` 有增长，但 `sync callback` 没出现，优先排查时间戳、`camera_info`、同步窗口和 `message_filters`。
-
-### 1.3 下一开发版本：`alpha-0.0.1.2`
-
-`alpha-0.0.1.2` 将替换当前 `message_filters::ApproximateTime` 同步方案，改为：
+`alpha-0.0.1.2` 替换当前三路 `message_filters` 同步方案，改为：
 
 - 普通订阅（RGB / Depth / CameraInfo）
 - 最近帧缓存
 - 手工时间戳匹配
 - 明确的超时 / 丢帧 / 诊断日志
 
-目标是提高在真实相机与 synthetic pub 环境下的同步可控性与可调试性。
+目标是提高在真实相机与 synthetic pub 环境下的同步可控性、可调试性和稳定性。
+
+### 1.1.1 640x480@30fps 管道审计（当前工作结论）
+
+- 摄像头原始输入按 **640x480 @ 30fps** 接收，但感知主链默认只对 **每 3 个同步帧执行 1 次完整处理**，将主感知负载控制在约 **10Hz**。
+- `detect_every_n_frames` 现在按“**已处理帧**”计数，默认值改为 `1`，避免降采样后检测频率被再次误降到约 3.3Hz。
+- `sync_cache_size` 默认从 `30` 收紧到 `6`，降低手工同步缓存积压旧帧的概率。
+- 避障节点改为“**只缓存最新 depth 帧 + 20Hz 定时器处理**”，并新增 `depth_sample_stride` 参数，避免对 30fps 深度图逐帧全 ROI 扫描。
+- YOLO 运行时仍使用 **640x640** 输入，因为当前 ONNX 模型按该尺寸导出；这部分不是无效浪费，而是当前模型输入约束。
+
+### 1.2 dev-0.0.1.1 保留内容
+
+`dev-0.0.1.1` 已作为联调快照保留，主要用于回溯以下日志能力：
+
+- 原始输入探针计数：RGB / Depth / CameraInfo 是否真的收到
+- 三路同步回调计数：同步是否真的形成
+- `person_pose` 发布计数：同步形成后是否进入发布路径
+- 启动参数回显：YOLO / ReID 输入尺寸、topic、`sync_slop`
 
 ---
 
@@ -144,7 +135,8 @@ ros2_smart_follower/
 
 ### 4.2 主要 ROS2 依赖
 - `rclcpp`, `rclcpp_lifecycle`, `lifecycle_msgs`
-- `message_filters`, `tf2_ros`, `tf2_geometry_msgs`
+- `tf2_ros`, `tf2_geometry_msgs`
+- `rclcpp` 原生订阅 + 手工时间戳匹配同步
 - `cv_bridge`, `image_geometry`
 - `diagnostic_updater`
 

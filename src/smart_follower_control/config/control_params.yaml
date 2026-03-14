@@ -41,6 +41,7 @@ obstacle_avoidance_node:
     depth_roi_width_ratio: 0.40
     depth_roi_height_ratio: 0.35
     depth_percentile: 0.05
+    depth_sample_stride: 2
     turn_speed: 0.5
     slow_turn_speed: 0.25
     back_speed: -0.15

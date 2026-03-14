@@ -22,10 +22,12 @@
       recover_threshold: 0.70
 
     sync_slop: 0.04
-    detect_every_n_frames: 3
+    process_every_n_frames: 3
+    detect_every_n_frames: 1
     min_confirm_hits: 3
     max_miss_frames: 10
     feature_buffer_size: 20
+    sync_cache_size: 6
     memory_sec: 30.0
 
     tracking:

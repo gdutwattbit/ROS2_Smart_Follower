@@ -7,6 +7,7 @@
 #include <deque>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <memory>
 #include <optional>
 #include <string>
@@ -18,9 +19,6 @@
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <image_geometry/pinhole_camera_model.h>
-#include <message_filters/subscriber.h>
-#include <message_filters/sync_policies/approximate_time.h>
-#include <message_filters/synchronizer.h>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/video/tracking.hpp>
@@ -52,7 +50,7 @@ namespace
 constexpr int kStateDim = 10;
 constexpr int kMeasureDim = 4;
 constexpr int kFeatureDim = 2048;
-constexpr char kDebugVersion[] = "dev-0.0.1.1";
+constexpr char kRuntimeVersion[] = "alpha-0.0.1.2";
 }  // namespace
 
 struct MemoryEntry
@@ -461,9 +459,13 @@ public:
 private:
   using Image = sensor_msgs::msg::Image;
   using CameraInfo = sensor_msgs::msg::CameraInfo;
-  using SyncPolicy = message_filters::sync_policies::ApproximateTime<Image, Image, CameraInfo>;
-  using ImageSubscriber = message_filters::Subscriber<Image, rclcpp_lifecycle::LifecycleNode>;
-  using CameraInfoSubscriber = message_filters::Subscriber<CameraInfo, rclcpp_lifecycle::LifecycleNode>;
+
+  template<typename MsgT>
+  struct CachedMessage
+  {
+    typename MsgT::SharedPtr msg;
+    rclcpp::Time stamp;
+  };
 
   struct Params
   {
@@ -476,10 +478,12 @@ private:
     std::string yolo_model_path{"models/yolo26n.onnx"};
     std::string reid_model_path{"models/reid_resnet50_2048.onnx"};
 
-    int detect_every_n_frames{3};
+    int process_every_n_frames{3};
+    int detect_every_n_frames{1};
     int min_confirm_hits{3};
     int max_miss_frames{10};
     int feature_buffer_size{20};
+    int sync_cache_size{6};
     int lock_stable_frames{5};
     float lock_hold_sec{0.6F};
     float lock_switch_sec{2.0F};
@@ -498,7 +502,7 @@ private:
     float lock_center_roi_ratio{0.6F};
     float lock_target_area_ratio{0.04F};
     int yolo_input_w{640};
-    int yolo_input_h{480};
+    int yolo_input_h{640};
     int reid_input_w{128};
     int reid_input_h{256};
     int person_class_id{0};
@@ -508,20 +512,22 @@ private:
 
   rclcpp_lifecycle::LifecyclePublisher<smart_follower_msgs::msg::PersonPoseArray>::SharedPtr person_pub_;
   rclcpp::Subscription<smart_follower_msgs::msg::FollowCommand>::SharedPtr command_sub_;
-
-  std::shared_ptr<ImageSubscriber> color_sub_;
-  std::shared_ptr<ImageSubscriber> depth_sub_;
-  std::shared_ptr<CameraInfoSubscriber> info_sub_;
-  rclcpp::Subscription<Image>::SharedPtr color_probe_sub_;
-  rclcpp::Subscription<Image>::SharedPtr depth_probe_sub_;
-  rclcpp::Subscription<CameraInfo>::SharedPtr info_probe_sub_;
-  std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
+  rclcpp::Subscription<Image>::SharedPtr color_sub_;
+  rclcpp::Subscription<Image>::SharedPtr depth_sub_;
+  rclcpp::Subscription<CameraInfo>::SharedPtr info_sub_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
+
+  std::deque<CachedMessage<Image>> color_cache_;
+  std::deque<CachedMessage<Image>> depth_cache_;
+  std::deque<CachedMessage<CameraInfo>> info_cache_;
+  std::mutex cache_mutex_;
+  std::mutex process_mutex_;
 
   std::unordered_map<int, Track> tracks_;
   std::deque<MemoryEntry> memory_bank_;
   int next_track_id_{1};
-  int frame_counter_{0};
+  int synced_frame_counter_{0};
+  int processed_frame_counter_{0};
 
   int lock_id_{-1};
   uint8_t lock_state_{smart_follower_msgs::msg::PersonPoseArray::IDLE};
@@ -543,6 +549,7 @@ private:
   std::size_t raw_depth_count_{0};
   std::size_t raw_info_count_{0};
   std::size_t synced_callback_count_{0};
+  std::size_t skipped_synced_frame_count_{0};
   std::size_t person_pose_publish_count_{0};
   rclcpp::Time last_color_msg_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_depth_msg_stamp_{0, 0, RCL_ROS_TIME};
@@ -555,50 +562,169 @@ private:
     return stamp.nanoseconds() > 0 ? stamp.seconds() : -1.0;
   }
 
+  template<typename MsgT>
+  void trim_cache_to_limit(std::deque<CachedMessage<MsgT>> & cache)
+  {
+    while (static_cast<int>(cache.size()) > p_.sync_cache_size) {
+      cache.pop_front();
+      dropped_sync_frames_ += 1;
+    }
+  }
+
+  template<typename MsgT>
+  std::optional<std::size_t> find_best_match_index(
+    const std::deque<CachedMessage<MsgT>> & cache,
+    const rclcpp::Time & target_stamp) const
+  {
+    std::optional<std::size_t> best_index;
+    double best_diff = static_cast<double>(p_.sync_slop) + 1e-9;
+    for (std::size_t i = 0; i < cache.size(); ++i) {
+      const double diff = std::abs((cache[i].stamp - target_stamp).seconds());
+      if (diff <= p_.sync_slop && diff < best_diff) {
+        best_diff = diff;
+        best_index = i;
+      }
+    }
+    return best_index;
+  }
+
+  template<typename MsgT>
+  void discard_stale_front_entries(
+    std::deque<CachedMessage<MsgT>> & cache,
+    const rclcpp::Time & reference_stamp)
+  {
+    while (!cache.empty() && (reference_stamp - cache.front().stamp).seconds() > p_.sync_slop) {
+      cache.pop_front();
+      dropped_sync_frames_ += 1;
+    }
+  }
+
   void log_raw_input_status()
   {
     RCLCPP_INFO_THROTTLE(
       get_logger(),
       *get_clock(),
       2000,
-      "[%s] raw_input color=%zu depth=%zu info=%zu last_stamp=(%.3f, %.3f, %.3f)",
-      kDebugVersion,
+      "[%s] raw_input color=%zu depth=%zu info=%zu cache=(%zu,%zu,%zu) last_stamp=(%.3f, %.3f, %.3f)",
+      kRuntimeVersion,
       raw_color_count_,
       raw_depth_count_,
       raw_info_count_,
+      color_cache_.size(),
+      depth_cache_.size(),
+      info_cache_.size(),
       stamp_seconds_or_negative(last_color_msg_stamp_),
       stamp_seconds_or_negative(last_depth_msg_stamp_),
       stamp_seconds_or_negative(last_info_msg_stamp_));
   }
 
-  void on_color_probe(const Image::SharedPtr msg)
+  bool pop_next_synchronized_triplet(
+    Image::SharedPtr & color_msg,
+    Image::SharedPtr & depth_msg,
+    CameraInfo::SharedPtr & info_msg)
   {
-    if (!msg) {
-      return;
+    while (true) {
+      if (color_cache_.empty() || depth_cache_.empty() || info_cache_.empty()) {
+        return false;
+      }
+
+      const rclcpp::Time color_stamp = color_cache_.front().stamp;
+      discard_stale_front_entries(depth_cache_, color_stamp);
+      discard_stale_front_entries(info_cache_, color_stamp);
+      if (color_cache_.empty() || depth_cache_.empty() || info_cache_.empty()) {
+        return false;
+      }
+
+      const auto depth_idx = find_best_match_index(depth_cache_, color_stamp);
+      const auto info_idx = find_best_match_index(info_cache_, color_stamp);
+      if (depth_idx.has_value() && info_idx.has_value()) {
+        color_msg = color_cache_.front().msg;
+        depth_msg = depth_cache_.at(*depth_idx).msg;
+        info_msg = info_cache_.at(*info_idx).msg;
+        color_cache_.pop_front();
+        depth_cache_.erase(depth_cache_.begin() + static_cast<std::ptrdiff_t>(*depth_idx));
+        info_cache_.erase(info_cache_.begin() + static_cast<std::ptrdiff_t>(*info_idx));
+        return true;
+      }
+
+      const bool depth_too_old = (depth_cache_.back().stamp - color_stamp).seconds() < -p_.sync_slop;
+      const bool info_too_old = (info_cache_.back().stamp - color_stamp).seconds() < -p_.sync_slop;
+      if (depth_too_old || info_too_old) {
+        color_cache_.pop_front();
+        dropped_sync_frames_ += 1;
+        continue;
+      }
+      return false;
     }
-    raw_color_count_ += 1;
-    last_color_msg_stamp_ = rclcpp::Time(msg->header.stamp);
-    log_raw_input_status();
   }
 
-  void on_depth_probe(const Image::SharedPtr msg)
+  void try_process_cached_frames()
   {
-    if (!msg) {
+    std::unique_lock<std::mutex> process_lock(process_mutex_, std::try_to_lock);
+    if (!process_lock.owns_lock()) {
       return;
     }
-    raw_depth_count_ += 1;
-    last_depth_msg_stamp_ = rclcpp::Time(msg->header.stamp);
-    log_raw_input_status();
+
+    while (true) {
+      Image::SharedPtr color_msg;
+      Image::SharedPtr depth_msg;
+      CameraInfo::SharedPtr info_msg;
+      {
+        std::lock_guard<std::mutex> cache_lock(cache_mutex_);
+        if (!pop_next_synchronized_triplet(color_msg, depth_msg, info_msg)) {
+          return;
+        }
+      }
+      process_synchronized_frame(color_msg, depth_msg, info_msg);
+    }
   }
 
-  void on_info_probe(const CameraInfo::SharedPtr msg)
+  void on_color_message(const Image::SharedPtr msg)
   {
     if (!msg) {
       return;
     }
-    raw_info_count_ += 1;
-    last_info_msg_stamp_ = rclcpp::Time(msg->header.stamp);
-    log_raw_input_status();
+    {
+      std::lock_guard<std::mutex> lock(cache_mutex_);
+      raw_color_count_ += 1;
+      last_color_msg_stamp_ = rclcpp::Time(msg->header.stamp);
+      color_cache_.push_back(CachedMessage<Image>{msg, last_color_msg_stamp_});
+      trim_cache_to_limit(color_cache_);
+      log_raw_input_status();
+    }
+    try_process_cached_frames();
+  }
+
+  void on_depth_message(const Image::SharedPtr msg)
+  {
+    if (!msg) {
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(cache_mutex_);
+      raw_depth_count_ += 1;
+      last_depth_msg_stamp_ = rclcpp::Time(msg->header.stamp);
+      depth_cache_.push_back(CachedMessage<Image>{msg, last_depth_msg_stamp_});
+      trim_cache_to_limit(depth_cache_);
+      log_raw_input_status();
+    }
+    try_process_cached_frames();
+  }
+
+  void on_info_message(const CameraInfo::SharedPtr msg)
+  {
+    if (!msg) {
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(cache_mutex_);
+      raw_info_count_ += 1;
+      last_info_msg_stamp_ = rclcpp::Time(msg->header.stamp);
+      info_cache_.push_back(CachedMessage<CameraInfo>{msg, last_info_msg_stamp_});
+      trim_cache_to_limit(info_cache_);
+      log_raw_input_status();
+    }
+    try_process_cached_frames();
   }
 
   void declare_parameters()
@@ -623,10 +749,12 @@ private:
     this->declare_parameter("reid.recover_threshold", p_.reid_recover_threshold);
 
     this->declare_parameter("sync_slop", p_.sync_slop);
+    this->declare_parameter("process_every_n_frames", p_.process_every_n_frames);
     this->declare_parameter("detect_every_n_frames", p_.detect_every_n_frames);
     this->declare_parameter("min_confirm_hits", p_.min_confirm_hits);
     this->declare_parameter("max_miss_frames", p_.max_miss_frames);
     this->declare_parameter("feature_buffer_size", p_.feature_buffer_size);
+    this->declare_parameter("sync_cache_size", p_.sync_cache_size);
     this->declare_parameter("memory_sec", p_.memory_sec);
 
     this->declare_parameter("tracking.low_score_threshold", p_.low_score_threshold);
@@ -672,10 +800,12 @@ private:
     p_.reid_recover_threshold = this->get_parameter("reid.recover_threshold").as_double();
 
     p_.sync_slop = this->get_parameter("sync_slop").as_double();
+    p_.process_every_n_frames = std::max<int>(1, static_cast<int>(this->get_parameter("process_every_n_frames").as_int()));
     p_.detect_every_n_frames = std::max<int>(1, static_cast<int>(this->get_parameter("detect_every_n_frames").as_int()));
     p_.min_confirm_hits = this->get_parameter("min_confirm_hits").as_int();
     p_.max_miss_frames = this->get_parameter("max_miss_frames").as_int();
     p_.feature_buffer_size = std::max<int>(1, static_cast<int>(this->get_parameter("feature_buffer_size").as_int()));
+    p_.sync_cache_size = std::max<int>(3, static_cast<int>(this->get_parameter("sync_cache_size").as_int()));
     p_.memory_sec = this->get_parameter("memory_sec").as_double();
 
     p_.low_score_threshold = this->get_parameter("tracking.low_score_threshold").as_double();
@@ -712,27 +842,18 @@ private:
       10,
       std::bind(&PerceptionNode::on_follow_command, this, std::placeholders::_1));
 
-    const auto sensor_qos = rclcpp::SensorDataQoS().get_rmw_qos_profile();
-    color_sub_ = std::make_shared<ImageSubscriber>(this, p_.color_topic, sensor_qos);
-    depth_sub_ = std::make_shared<ImageSubscriber>(this, p_.depth_topic, sensor_qos);
-    info_sub_ = std::make_shared<CameraInfoSubscriber>(this, p_.camera_info_topic, sensor_qos);
-
-    color_probe_sub_ = this->create_subscription<Image>(
+    color_sub_ = this->create_subscription<Image>(
       p_.color_topic,
       rclcpp::SensorDataQoS(),
-      std::bind(&PerceptionNode::on_color_probe, this, std::placeholders::_1));
-    depth_probe_sub_ = this->create_subscription<Image>(
+      std::bind(&PerceptionNode::on_color_message, this, std::placeholders::_1));
+    depth_sub_ = this->create_subscription<Image>(
       p_.depth_topic,
       rclcpp::SensorDataQoS(),
-      std::bind(&PerceptionNode::on_depth_probe, this, std::placeholders::_1));
-    info_probe_sub_ = this->create_subscription<CameraInfo>(
+      std::bind(&PerceptionNode::on_depth_message, this, std::placeholders::_1));
+    info_sub_ = this->create_subscription<CameraInfo>(
       p_.camera_info_topic,
       rclcpp::SensorDataQoS(),
-      std::bind(&PerceptionNode::on_info_probe, this, std::placeholders::_1));
-
-    sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(SyncPolicy(30), *color_sub_, *depth_sub_, *info_sub_);
-    sync_->setMaxIntervalDuration(rclcpp::Duration::from_seconds(p_.sync_slop));
-    sync_->registerCallback(std::bind(&PerceptionNode::on_synchronized_frame, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+      std::bind(&PerceptionNode::on_info_message, this, std::placeholders::_1));
 
     diagnostics_.setHardwareID("smart_follower_perception");
     diagnostics_.add("perception_status", this, &PerceptionNode::diagnostics_callback);
@@ -740,8 +861,8 @@ private:
     param_callback_handle_ = this->add_on_set_parameters_callback(
       std::bind(&PerceptionNode::on_parameters_set, this, std::placeholders::_1));
 
-    RCLCPP_INFO(get_logger(), "[%s] Configured perception node. YOLO ready=%d ReID ready=%d yolo_input=%dx%d reid_input=%dx%d detect_every_n_frames=%d", kDebugVersion, yolo_.ready(), reid_.ready(), p_.yolo_input_w, p_.yolo_input_h, p_.reid_input_w, p_.reid_input_h, p_.detect_every_n_frames);
-    RCLCPP_INFO(get_logger(), "[%s] input topics color=%s depth=%s info=%s person_pose=%s sync_slop=%.3f", kDebugVersion, p_.color_topic.c_str(), p_.depth_topic.c_str(), p_.camera_info_topic.c_str(), p_.person_pose_topic.c_str(), p_.sync_slop);
+    RCLCPP_INFO(get_logger(), "[%s] Configured perception node. YOLO ready=%d ReID ready=%d yolo_input=%dx%d reid_input=%dx%d process_every_n_frames=%d detect_every_n_frames=%d", kRuntimeVersion, yolo_.ready(), reid_.ready(), p_.yolo_input_w, p_.yolo_input_h, p_.reid_input_w, p_.reid_input_h, p_.process_every_n_frames, p_.detect_every_n_frames);
+    RCLCPP_INFO(get_logger(), "[%s] input topics color=%s depth=%s info=%s person_pose=%s sync_slop=%.3f cache_size=%d", kRuntimeVersion, p_.color_topic.c_str(), p_.depth_topic.c_str(), p_.camera_info_topic.c_str(), p_.person_pose_topic.c_str(), p_.sync_slop, p_.sync_cache_size);
     return CallbackReturn::SUCCESS;
   }
 
@@ -761,23 +882,28 @@ private:
 
   CallbackReturn on_cleanup(const rclcpp_lifecycle::State &) override
   {
-    sync_.reset();
     color_sub_.reset();
     depth_sub_.reset();
     info_sub_.reset();
-    color_probe_sub_.reset();
-    depth_probe_sub_.reset();
-    info_probe_sub_.reset();
     command_sub_.reset();
     person_pub_.reset();
     tracks_.clear();
     memory_bank_.clear();
     next_track_id_ = 1;
+    {
+      std::lock_guard<std::mutex> lock(cache_mutex_);
+      color_cache_.clear();
+      depth_cache_.clear();
+      info_cache_.clear();
+    }
     raw_color_count_ = 0;
     raw_depth_count_ = 0;
     raw_info_count_ = 0;
     synced_callback_count_ = 0;
+    skipped_synced_frame_count_ = 0;
     person_pose_publish_count_ = 0;
+    synced_frame_counter_ = 0;
+    processed_frame_counter_ = 0;
     last_color_msg_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     last_depth_msg_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     last_info_msg_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
@@ -1247,7 +1373,7 @@ private:
     return msg;
   }
 
-  void on_synchronized_frame(const Image::ConstSharedPtr & color_msg, const Image::ConstSharedPtr & depth_msg, const CameraInfo::ConstSharedPtr & info_msg)
+  void process_synchronized_frame(const Image::SharedPtr & color_msg, const Image::SharedPtr & depth_msg, const CameraInfo::SharedPtr & info_msg)
   {
     if (this->get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
       return;
@@ -1258,6 +1384,23 @@ private:
 
     if (std::abs((rclcpp::Time(color_msg->header.stamp) - rclcpp::Time(depth_msg->header.stamp)).seconds()) > p_.sync_slop) {
       dropped_sync_frames_++;
+      return;
+    }
+
+    synced_callback_count_ += 1;
+    synced_frame_counter_++;
+    const bool run_pipeline = (synced_frame_counter_ % p_.process_every_n_frames == 0);
+    if (!run_pipeline) {
+      skipped_synced_frame_count_ += 1;
+      RCLCPP_INFO_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        2000,
+        "[%s] sync callback synced=%zu synced_frame=%d processed=%d run_pipeline=0",
+        kRuntimeVersion,
+        synced_callback_count_,
+        synced_frame_counter_,
+        processed_frame_counter_);
       return;
     }
 
@@ -1278,11 +1421,10 @@ private:
       return;
     }
 
-    synced_callback_count_ += 1;
-    frame_counter_++;
+    processed_frame_counter_++;
     std::vector<Detection> detections;
-    const bool run_detect = (frame_counter_ % p_.detect_every_n_frames == 0);
-    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "[%s] sync callback synced=%zu frame=%d run_detect=%d", kDebugVersion, synced_callback_count_, frame_counter_, run_detect ? 1 : 0);
+    const bool run_detect = (processed_frame_counter_ % p_.detect_every_n_frames == 0);
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "[%s] sync callback synced=%zu synced_frame=%d processed=%d run_pipeline=1 run_detect=%d", kRuntimeVersion, synced_callback_count_, synced_frame_counter_, processed_frame_counter_, run_detect ? 1 : 0);
     if (run_detect) {
       auto dets = yolo_.detect(color);
       detections.reserve(dets.size());
@@ -1331,7 +1473,7 @@ private:
     if (person_pub_ && person_pub_->is_activated()) {
       person_pub_->publish(out);
       person_pose_publish_count_ += 1;
-      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "[%s] published person_pose publish_count=%zu persons=%zu lock_id=%d lock_state=%u detections=%zu", kDebugVersion, person_pose_publish_count_, out.persons.size(), out.lock_id, out.lock_state, detections.size());
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "[%s] published person_pose publish_count=%zu persons=%zu lock_id=%d lock_state=%u detections=%zu", kRuntimeVersion, person_pose_publish_count_, out.persons.size(), out.lock_id, out.lock_state, detections.size());
     }
 
     last_detection_count_ = detections.size();
@@ -1348,6 +1490,8 @@ private:
     stat.add("raw_depth_count", static_cast<int>(raw_depth_count_));
     stat.add("raw_info_count", static_cast<int>(raw_info_count_));
     stat.add("synced_callback_count", static_cast<int>(synced_callback_count_));
+    stat.add("skipped_synced_frame_count", static_cast<int>(skipped_synced_frame_count_));
+    stat.add("processed_frame_count", processed_frame_counter_);
     stat.add("person_pose_publish_count", static_cast<int>(person_pose_publish_count_));
     stat.add("last_infer_ms", last_infer_ms_);
     stat.add("lock_id", lock_id_);
