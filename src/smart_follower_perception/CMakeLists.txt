@@ -27,8 +27,14 @@ find_package(smart_follower_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
 
+set(SMART_FOLLOWER_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party")
+
 set(ONNXRUNTIME_HINTS
   $ENV{ONNXRUNTIME_ROOT}
+  ${SMART_FOLLOWER_THIRD_PARTY_DIR}/onnxruntime-linux-aarch64-1.24.3
+  ${SMART_FOLLOWER_THIRD_PARTY_DIR}/onnxruntime-linux-aarch64
+  ${SMART_FOLLOWER_THIRD_PARTY_DIR}/onnxruntime
+  $ENV{HOME}/opt/onnxruntime-linux-aarch64-1.24.3
   $ENV{HOME}/opt/onnxruntime-linux-x64-1.23.2
   /usr
   /usr/local
