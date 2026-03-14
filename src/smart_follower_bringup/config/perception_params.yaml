@@ -1,4 +1,4 @@
-﻿perception_node:
+/**:
   ros__parameters:
     color_topic: /camera/color/image_raw
     depth_topic: /camera/depth/image_raw
@@ -10,7 +10,7 @@
     yolo:
       model_path: models/yolo26n.onnx
       input_w: 640
-      input_h: 480
+      input_h: 640
       person_class_id: 0
       conf_threshold: 0.25
 

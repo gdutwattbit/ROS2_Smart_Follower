@@ -151,7 +151,13 @@ public:
     Ort::Value input = Ort::Value::CreateTensor<float>(mem_info, input_tensor.data(), input_tensor.size(), input_shape.data(), input_shape.size());
     std::vector<const char *> input_names{input_name_.c_str()};
     std::vector<const char *> output_names{output_name_.c_str()};
-    auto outputs = session_->Run(Ort::RunOptions{nullptr}, input_names.data(), &input, 1, output_names.data(), 1);
+    std::vector<Ort::Value> outputs;
+    try {
+      outputs = session_->Run(Ort::RunOptions{nullptr}, input_names.data(), &input, 1, output_names.data(), 1);
+    } catch (const Ort::Exception & ex) {
+      std::fprintf(stderr, "[smart_follower][yolo] ONNXRuntime inference failed: %s\n", ex.what());
+      return {};
+    }
     if (outputs.empty()) {
       return {};
     }
@@ -169,29 +175,46 @@ public:
 
     const int64_t n = shape[1];
     const int64_t c = shape[2];
+    const bool is_end2end_output = (c == 6);
     for (int64_t i = 0; i < n; ++i) {
       const float * row = data + i * c;
       if (c < 6) {
         continue;
       }
-      float obj = row[4];
+
+      cv::Rect2f box;
+      float conf = 0.0F;
       int best_cls = -1;
-      float best_prob = 0.0F;
-      for (int64_t k = 5; k < c; ++k) {
-        if (row[k] > best_prob) {
-          best_prob = row[k];
-          best_cls = static_cast<int>(k - 5);
+
+      if (is_end2end_output) {
+        const float x1 = row[0] * scale_x;
+        const float y1 = row[1] * scale_y;
+        const float x2 = row[2] * scale_x;
+        const float y2 = row[3] * scale_y;
+        conf = row[4];
+        best_cls = static_cast<int>(std::round(row[5]));
+        box = cv::Rect2f(x1, y1, x2 - x1, y2 - y1);
+      } else {
+        const float obj = row[4];
+        float best_prob = 0.0F;
+        for (int64_t k = 5; k < c; ++k) {
+          if (row[k] > best_prob) {
+            best_prob = row[k];
+            best_cls = static_cast<int>(k - 5);
+          }
         }
+        conf = obj * best_prob;
+        const float cx = row[0];
+        const float cy = row[1];
+        const float w = row[2];
+        const float h = row[3];
+        box = cv::Rect2f((cx - 0.5F * w) * scale_x, (cy - 0.5F * h) * scale_y, w * scale_x, h * scale_y);
       }
-      const float conf = obj * best_prob;
+
       if (best_cls != person_class_id_ || conf < conf_threshold_) {
         continue;
       }
-      const float cx = row[0];
-      const float cy = row[1];
-      const float w = row[2];
-      const float h = row[3];
-      cv::Rect2f box((cx - 0.5F * w) * scale_x, (cy - 0.5F * h) * scale_y, w * scale_x, h * scale_y);
+
       box &= cv::Rect2f(0.0F, 0.0F, static_cast<float>(bgr.cols), static_cast<float>(bgr.rows));
       if (box.width > 1.0F && box.height > 1.0F) {
         results.push_back(Result{box, conf});
@@ -640,7 +663,7 @@ private:
     param_callback_handle_ = this->add_on_set_parameters_callback(
       std::bind(&PerceptionNode::on_parameters_set, this, std::placeholders::_1));
 
-    RCLCPP_INFO(get_logger(), "Configured perception node. YOLO ready=%d ReID ready=%d", yolo_.ready(), reid_.ready());
+    RCLCPP_INFO(get_logger(), "Configured perception node. YOLO ready=%d ReID ready=%d yolo_input=%dx%d reid_input=%dx%d detect_every_n_frames=%d", yolo_.ready(), reid_.ready(), p_.yolo_input_w, p_.yolo_input_h, p_.reid_input_w, p_.reid_input_h, p_.detect_every_n_frames);
     return CallbackReturn::SUCCESS;
   }
 
@@ -1169,6 +1192,7 @@ private:
     frame_counter_++;
     std::vector<Detection> detections;
     const bool run_detect = (frame_counter_ % p_.detect_every_n_frames == 0);
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "sync callback frame=%d run_detect=%d", frame_counter_, run_detect ? 1 : 0);
     if (run_detect) {
       auto dets = yolo_.detect(color);
       detections.reserve(dets.size());
@@ -1216,6 +1240,7 @@ private:
 
     if (person_pub_ && person_pub_->is_activated()) {
       person_pub_->publish(out);
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "published person_pose persons=%zu lock_id=%d lock_state=%u detections=%zu", out.persons.size(), out.lock_id, out.lock_state, detections.size());
     }
 
     last_detection_count_ = detections.size();

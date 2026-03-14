@@ -30,6 +30,7 @@ find_package(Eigen3 REQUIRED)
 
 set(ONNXRUNTIME_HINTS
   $ENV{ONNXRUNTIME_ROOT}
+  $ENV{HOME}/opt/onnxruntime-linux-x64-1.23.2
   /usr
   /usr/local
 )
@@ -56,6 +57,11 @@ if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
   target_compile_definitions(perception_node PRIVATE HAVE_ONNXRUNTIME=1)
   target_include_directories(perception_node PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
   target_link_libraries(perception_node ${ONNXRUNTIME_LIBRARY})
+  get_filename_component(ONNXRUNTIME_LIBRARY_DIR ${ONNXRUNTIME_LIBRARY} DIRECTORY)
+  set_target_properties(perception_node PROPERTIES
+    BUILD_RPATH ${ONNXRUNTIME_LIBRARY_DIR}
+    INSTALL_RPATH ${ONNXRUNTIME_LIBRARY_DIR}
+  )
 else()
   message(WARNING "ONNX Runtime not found. perception_node will build with stub inference.")
 endif()
