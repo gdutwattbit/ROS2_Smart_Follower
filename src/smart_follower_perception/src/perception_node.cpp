@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cmath>
 #include <deque>
 #include <functional>
@@ -51,6 +52,7 @@ namespace
 constexpr int kStateDim = 10;
 constexpr int kMeasureDim = 4;
 constexpr int kFeatureDim = 2048;
+constexpr char kDebugVersion[] = "dev-0.0.1.1";
 }  // namespace
 
 struct MemoryEntry
@@ -510,6 +512,9 @@ private:
   std::shared_ptr<ImageSubscriber> color_sub_;
   std::shared_ptr<ImageSubscriber> depth_sub_;
   std::shared_ptr<CameraInfoSubscriber> info_sub_;
+  rclcpp::Subscription<Image>::SharedPtr color_probe_sub_;
+  rclcpp::Subscription<Image>::SharedPtr depth_probe_sub_;
+  rclcpp::Subscription<CameraInfo>::SharedPtr info_probe_sub_;
   std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
 
@@ -534,8 +539,67 @@ private:
   std::size_t dropped_sync_frames_{0};
   double last_infer_ms_{0.0};
   std::size_t last_detection_count_{0};
+  std::size_t raw_color_count_{0};
+  std::size_t raw_depth_count_{0};
+  std::size_t raw_info_count_{0};
+  std::size_t synced_callback_count_{0};
+  std::size_t person_pose_publish_count_{0};
+  rclcpp::Time last_color_msg_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_depth_msg_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_info_msg_stamp_{0, 0, RCL_ROS_TIME};
 
   image_geometry::PinholeCameraModel camera_model_;
+
+  double stamp_seconds_or_negative(const rclcpp::Time & stamp) const
+  {
+    return stamp.nanoseconds() > 0 ? stamp.seconds() : -1.0;
+  }
+
+  void log_raw_input_status()
+  {
+    RCLCPP_INFO_THROTTLE(
+      get_logger(),
+      *get_clock(),
+      2000,
+      "[%s] raw_input color=%zu depth=%zu info=%zu last_stamp=(%.3f, %.3f, %.3f)",
+      kDebugVersion,
+      raw_color_count_,
+      raw_depth_count_,
+      raw_info_count_,
+      stamp_seconds_or_negative(last_color_msg_stamp_),
+      stamp_seconds_or_negative(last_depth_msg_stamp_),
+      stamp_seconds_or_negative(last_info_msg_stamp_));
+  }
+
+  void on_color_probe(const Image::SharedPtr msg)
+  {
+    if (!msg) {
+      return;
+    }
+    raw_color_count_ += 1;
+    last_color_msg_stamp_ = rclcpp::Time(msg->header.stamp);
+    log_raw_input_status();
+  }
+
+  void on_depth_probe(const Image::SharedPtr msg)
+  {
+    if (!msg) {
+      return;
+    }
+    raw_depth_count_ += 1;
+    last_depth_msg_stamp_ = rclcpp::Time(msg->header.stamp);
+    log_raw_input_status();
+  }
+
+  void on_info_probe(const CameraInfo::SharedPtr msg)
+  {
+    if (!msg) {
+      return;
+    }
+    raw_info_count_ += 1;
+    last_info_msg_stamp_ = rclcpp::Time(msg->header.stamp);
+    log_raw_input_status();
+  }
 
   void declare_parameters()
   {
@@ -653,6 +717,19 @@ private:
     depth_sub_ = std::make_shared<ImageSubscriber>(this, p_.depth_topic, sensor_qos);
     info_sub_ = std::make_shared<CameraInfoSubscriber>(this, p_.camera_info_topic, sensor_qos);
 
+    color_probe_sub_ = this->create_subscription<Image>(
+      p_.color_topic,
+      rclcpp::SensorDataQoS(),
+      std::bind(&PerceptionNode::on_color_probe, this, std::placeholders::_1));
+    depth_probe_sub_ = this->create_subscription<Image>(
+      p_.depth_topic,
+      rclcpp::SensorDataQoS(),
+      std::bind(&PerceptionNode::on_depth_probe, this, std::placeholders::_1));
+    info_probe_sub_ = this->create_subscription<CameraInfo>(
+      p_.camera_info_topic,
+      rclcpp::SensorDataQoS(),
+      std::bind(&PerceptionNode::on_info_probe, this, std::placeholders::_1));
+
     sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(SyncPolicy(30), *color_sub_, *depth_sub_, *info_sub_);
     sync_->setMaxIntervalDuration(rclcpp::Duration::from_seconds(p_.sync_slop));
     sync_->registerCallback(std::bind(&PerceptionNode::on_synchronized_frame, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
@@ -663,7 +740,8 @@ private:
     param_callback_handle_ = this->add_on_set_parameters_callback(
       std::bind(&PerceptionNode::on_parameters_set, this, std::placeholders::_1));
 
-    RCLCPP_INFO(get_logger(), "Configured perception node. YOLO ready=%d ReID ready=%d yolo_input=%dx%d reid_input=%dx%d detect_every_n_frames=%d", yolo_.ready(), reid_.ready(), p_.yolo_input_w, p_.yolo_input_h, p_.reid_input_w, p_.reid_input_h, p_.detect_every_n_frames);
+    RCLCPP_INFO(get_logger(), "[%s] Configured perception node. YOLO ready=%d ReID ready=%d yolo_input=%dx%d reid_input=%dx%d detect_every_n_frames=%d", kDebugVersion, yolo_.ready(), reid_.ready(), p_.yolo_input_w, p_.yolo_input_h, p_.reid_input_w, p_.reid_input_h, p_.detect_every_n_frames);
+    RCLCPP_INFO(get_logger(), "[%s] input topics color=%s depth=%s info=%s person_pose=%s sync_slop=%.3f", kDebugVersion, p_.color_topic.c_str(), p_.depth_topic.c_str(), p_.camera_info_topic.c_str(), p_.person_pose_topic.c_str(), p_.sync_slop);
     return CallbackReturn::SUCCESS;
   }
 
@@ -687,11 +765,22 @@ private:
     color_sub_.reset();
     depth_sub_.reset();
     info_sub_.reset();
+    color_probe_sub_.reset();
+    depth_probe_sub_.reset();
+    info_probe_sub_.reset();
     command_sub_.reset();
     person_pub_.reset();
     tracks_.clear();
     memory_bank_.clear();
     next_track_id_ = 1;
+    raw_color_count_ = 0;
+    raw_depth_count_ = 0;
+    raw_info_count_ = 0;
+    synced_callback_count_ = 0;
+    person_pose_publish_count_ = 0;
+    last_color_msg_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    last_depth_msg_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    last_info_msg_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     return CallbackReturn::SUCCESS;
   }
 
@@ -1189,10 +1278,11 @@ private:
       return;
     }
 
+    synced_callback_count_ += 1;
     frame_counter_++;
     std::vector<Detection> detections;
     const bool run_detect = (frame_counter_ % p_.detect_every_n_frames == 0);
-    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "sync callback frame=%d run_detect=%d", frame_counter_, run_detect ? 1 : 0);
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "[%s] sync callback synced=%zu frame=%d run_detect=%d", kDebugVersion, synced_callback_count_, frame_counter_, run_detect ? 1 : 0);
     if (run_detect) {
       auto dets = yolo_.detect(color);
       detections.reserve(dets.size());
@@ -1240,7 +1330,8 @@ private:
 
     if (person_pub_ && person_pub_->is_activated()) {
       person_pub_->publish(out);
-      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "published person_pose persons=%zu lock_id=%d lock_state=%u detections=%zu", out.persons.size(), out.lock_id, out.lock_state, detections.size());
+      person_pose_publish_count_ += 1;
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "[%s] published person_pose publish_count=%zu persons=%zu lock_id=%d lock_state=%u detections=%zu", kDebugVersion, person_pose_publish_count_, out.persons.size(), out.lock_id, out.lock_state, detections.size());
     }
 
     last_detection_count_ = detections.size();
@@ -1253,6 +1344,11 @@ private:
     stat.add("active_tracks", static_cast<int>(tracks_.size()));
     stat.add("last_detection_count", static_cast<int>(last_detection_count_));
     stat.add("dropped_sync_frames", static_cast<int>(dropped_sync_frames_));
+    stat.add("raw_color_count", static_cast<int>(raw_color_count_));
+    stat.add("raw_depth_count", static_cast<int>(raw_depth_count_));
+    stat.add("raw_info_count", static_cast<int>(raw_info_count_));
+    stat.add("synced_callback_count", static_cast<int>(synced_callback_count_));
+    stat.add("person_pose_publish_count", static_cast<int>(person_pose_publish_count_));
     stat.add("last_infer_ms", last_infer_ms_);
     stat.add("lock_id", lock_id_);
     stat.add("lock_state", static_cast<int>(lock_state_));

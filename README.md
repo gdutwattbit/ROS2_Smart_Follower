@@ -17,8 +17,46 @@
 
 ## 1. 当前版本
 
-- **版本标签：`alpha-0.0.1.1`**
-- 状态：Alpha（完成主链路框架与基础联调，适合开发调试）
+- **发布基线：`alpha-0.0.1.1`**
+- **当前调试版：`dev-0.0.1.1`**
+- 状态：Debug（当前用于定位感知链路的输入订阅 / 三路同步 / person_pose 发布问题）
+
+### 1.1 dev-0.0.1.1 调试范围
+
+本调试版只增强 `smart_follower_perception` 的联调可观测性，不改变控制 / 仲裁接口。当前额外记录：
+
+- 原始输入探针计数：RGB / Depth / CameraInfo 是否真的收到
+- 三路同步回调计数：`ApproximateTime` 是否真的形成同步
+- `person_pose` 发布计数：同步形成后是否进入发布路径
+- 启动参数回显：YOLO / ReID 输入尺寸、topic、`sync_slop`
+
+### 1.2 dev-0.0.1.1 关键日志
+
+排查感知链路时，优先看以下日志：
+
+- `[dev-0.0.1.1] Configured perception node ...`
+  - 确认节点实际吃到的参数值，重点看 `yolo_input`、`reid_input`、`detect_every_n_frames`。
+- `[dev-0.0.1.1] input topics color=... depth=... info=... person_pose=... sync_slop=...`
+  - 确认 perception 真实订阅/发布的话题名。
+- `[dev-0.0.1.1] raw_input color=... depth=... info=... last_stamp=(...)`
+  - 只要这条日志增长，说明原始订阅已经收到三路消息。
+- `[dev-0.0.1.1] sync callback synced=... frame=... run_detect=...`
+  - 只有三路 `ApproximateTime` 真正形成后才会出现。
+- `[dev-0.0.1.1] published person_pose publish_count=... persons=...`
+  - 只要同步回调进入且 publisher 激活，就应看到这条日志，即使 `persons=0` 也应发布空数组。
+
+如果 `raw_input` 有增长，但 `sync callback` 没出现，优先排查时间戳、`camera_info`、同步窗口和 `message_filters`。
+
+### 1.3 下一开发版本：`alpha-0.0.1.2`
+
+`alpha-0.0.1.2` 将替换当前 `message_filters::ApproximateTime` 同步方案，改为：
+
+- 普通订阅（RGB / Depth / CameraInfo）
+- 最近帧缓存
+- 手工时间戳匹配
+- 明确的超时 / 丢帧 / 诊断日志
+
+目标是提高在真实相机与 synthetic pub 环境下的同步可控性与可调试性。
 
 ---
 
