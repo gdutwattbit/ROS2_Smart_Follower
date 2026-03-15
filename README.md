@@ -17,13 +17,14 @@
 
 ## 1. 当前版本
 
-- **当前开发版本：`alpha-0.0.1.2`**
+- **当前可用版本：`alpha-0.0.2`**
 - **上一调试快照：`dev-0.0.1.1`**
-- 状态：In Progress（当前正在将感知同步链路从 `message_filters::ApproximateTime` 重构为“普通订阅 + 最近帧缓存 + 手工时间戳匹配”）
+- 状态：Usable Alpha（主链路可启动，适合作为首个实机可用版本）
+- 注意：实机使用 Astra 深度相机时，外部 `turn_on_wheeltec_robot/wheeltec_camera.launch.py` 需显式传入 `depth_registration=true`，确保 `/camera/depth/image_raw` 对齐到彩色光学坐标系。
 
-### 1.1 alpha-0.0.1.2 目标
+### 1.1 alpha-0.0.2 目标
 
-`alpha-0.0.1.2` 替换当前三路 `message_filters` 同步方案，改为：
+`alpha-0.0.2` 作为首个可用版本，已完成手工时间同步、D2C 对齐验证、/cmd_vel 20Hz 仲裁验证，以及 Pi 5 上超声波 GPIO 后端切换为 libgpiod。
 
 - 普通订阅（RGB / Depth / CameraInfo）
 - 最近帧缓存

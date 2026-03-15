@@ -22,18 +22,19 @@ find_package(smart_follower_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 
 set(SMART_FOLLOWER_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party")
-set(PIGPIO_HINTS
-  $ENV{PIGPIO_ROOT}
-  ${SMART_FOLLOWER_THIRD_PARTY_DIR}/pigpio
+set(LIBGPIOD_HINTS
+  $ENV{LIBGPIOD_ROOT}
+  ${SMART_FOLLOWER_THIRD_PARTY_DIR}/libgpiod
+  ${SMART_FOLLOWER_THIRD_PARTY_DIR}/libgpiod/install
   /usr
   /usr/local
 )
-find_path(PIGPIO_INCLUDE_DIR pigpio.h
-  HINTS ${PIGPIO_HINTS}
-  PATH_SUFFIXES include include/pigpio
+find_path(LIBGPIOD_INCLUDE_DIR gpiod.h
+  HINTS ${LIBGPIOD_HINTS}
+  PATH_SUFFIXES include include/gpiod
 )
-find_library(PIGPIO_LIBRARY pigpio
-  HINTS ${PIGPIO_HINTS}
+find_library(LIBGPIOD_LIBRARY gpiod
+  HINTS ${LIBGPIOD_HINTS}
   PATH_SUFFIXES lib lib64 lib/aarch64-linux-gnu
 )
 
@@ -70,17 +71,17 @@ target_include_directories(keyboard_command_node PRIVATE include)
 add_executable(ultrasonic_range_node src/ultrasonic_range_node.cpp)
 ament_target_dependencies(ultrasonic_range_node ${common_deps})
 target_include_directories(ultrasonic_range_node PRIVATE include)
-if(PIGPIO_INCLUDE_DIR AND PIGPIO_LIBRARY)
-  target_compile_definitions(ultrasonic_range_node PRIVATE HAVE_PIGPIO=1)
-  target_include_directories(ultrasonic_range_node PRIVATE ${PIGPIO_INCLUDE_DIR})
-  target_link_libraries(ultrasonic_range_node ${PIGPIO_LIBRARY})
-  get_filename_component(PIGPIO_LIBRARY_DIR ${PIGPIO_LIBRARY} DIRECTORY)
+if(LIBGPIOD_INCLUDE_DIR AND LIBGPIOD_LIBRARY)
+  target_compile_definitions(ultrasonic_range_node PRIVATE HAVE_LIBGPIOD=1)
+  target_include_directories(ultrasonic_range_node PRIVATE ${LIBGPIOD_INCLUDE_DIR})
+  target_link_libraries(ultrasonic_range_node ${LIBGPIOD_LIBRARY})
+  get_filename_component(LIBGPIOD_LIBRARY_DIR ${LIBGPIOD_LIBRARY} DIRECTORY)
   set_target_properties(ultrasonic_range_node PROPERTIES
-    BUILD_RPATH ${PIGPIO_LIBRARY_DIR}
-    INSTALL_RPATH ${PIGPIO_LIBRARY_DIR}
+    BUILD_RPATH ${LIBGPIOD_LIBRARY_DIR}
+    INSTALL_RPATH ${LIBGPIOD_LIBRARY_DIR}
   )
 else()
-  message(WARNING "pigpio not found. ultrasonic_range_node will run in dry mode.")
+  message(WARNING "libgpiod not found. ultrasonic_range_node will run in dry mode.")
 endif()
 
 install(TARGETS

@@ -81,10 +81,10 @@
 
 ### 3.2 超声波硬件支持
 
-- `pigpio`
-- `libpigpio-dev`
+- `libgpiod`
+- `libgpiod-dev`
 
-若缺失，`ultrasonic_range_node` 可编译，但会进入 dry mode。
+若缺失，`ultrasonic_range_node` 可编译，但会进入 dry mode。Pi 5 主控当前使用 libgpiod 路线。
 
 ## 4. 可选 Python 依赖（模型训练 / 导出 / 校验）
 
@@ -130,7 +130,7 @@
 默认行为：
 
 - 安装基础工具链
-- 安装 OpenCV / Eigen / pigpio
+- 安装 OpenCV / Eigen / libgpiod
 - 自动执行 `rosdep install`
 - 跳过无法通过 rosdep 直接安装的 `turn_on_wheeltec_robot`
 - 若仓库中没有模型文件，则给出提示
