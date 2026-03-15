@@ -107,7 +107,9 @@ ros2_smart_follower/
 - PID 抗积分饱和（反算回推）
 
 ### 3.3 超声 + 深度避障（`ultrasonic_range_node` + `obstacle_avoidance_node`）
-- HC-SR04（pigpio）10Hz 中值滤波
+- HC-SR04（libgpiod，适配 Raspberry Pi 5）10Hz 中值滤波
+- 左右超声波分时触发，降低串扰
+- 已验证 GPIO 配置：左侧 `Trig=23 / Echo=24`，右侧 `Trig=4 / Echo=14`
 - 深度图中央 ROI 百分位距离
 - 与超声融合（取最危险距离）
 - 动态安全距离：
@@ -144,7 +146,7 @@ ros2_smart_follower/
 ### 4.3 三方库
 - OpenCV
 - Eigen3
-- pigpio（超声波 GPIO）
+- libgpiod（超声波 GPIO，Raspberry Pi 5 实机验证）
 - ONNX Runtime（可选但推荐，用于 YOLO/ReID 推理）
 
 > 若未检测到 ONNX Runtime，感知节点仍可编译，但会进入**推理桩模式**（日志中 `YOLO ready=0`、`ReID ready=0`）。
@@ -223,6 +225,13 @@ source install/setup.bash
 ros2 launch smart_follower_bringup smart_follower.launch.py \
   robot_ns:=robot1 bringup_robot:=true bringup_camera:=true
 ```
+
+
+### 7.3 alpha-0.0.2 超声波接线记录
+- 左侧 HC-SR04：`Trig=GPIO23`，`Echo=GPIO24`
+- 右侧 HC-SR04：`Trig=GPIO04`，`Echo=GPIO14`
+- 当前版本按上述引脚写入 `src/smart_follower_control/config/control_params.yaml`
+- 主控环境为 Raspberry Pi 5，超声波 GPIO 后端使用 `libgpiod`，设备节点实测为 `/dev/gpiochip4`
 
 ---
 

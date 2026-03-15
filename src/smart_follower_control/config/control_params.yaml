@@ -74,8 +74,8 @@ ultrasonic_range_node:
       echo_pin: 24
       topic: left_ultrasonic/range
     right:
-      trig_pin: 27
-      echo_pin: 22
+      trig_pin: 4
+      echo_pin: 14
       topic: right_ultrasonic/range
     frame_left: ultrasonic_left_link
     frame_right: ultrasonic_right_link

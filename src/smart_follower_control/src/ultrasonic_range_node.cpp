@@ -77,6 +77,9 @@ private:
 
   bool gpio_ok_{false};
   std::string gpio_backend_{"dry"};
+  double last_left_range_{std::numeric_limits<double>::infinity()};
+  double last_right_range_{std::numeric_limits<double>::infinity()};
+  bool measure_left_next_{true};
 #ifdef HAVE_LIBGPIOD
   std::string gpio_chip_path_;
 #endif
@@ -157,6 +160,9 @@ private:
 #endif
     gpio_ok_ = false;
     gpio_backend_ = "dry";
+    last_left_range_ = std::numeric_limits<double>::infinity();
+    last_right_range_ = std::numeric_limits<double>::infinity();
+    measure_left_next_ = true;
     return CallbackReturn::SUCCESS;
   }
 
@@ -421,7 +427,7 @@ cleanup:
     {
       return std::numeric_limits<double>::infinity();
     }
-    std::this_thread::sleep_for(std::chrono::microseconds(10));
+    std::this_thread::sleep_for(std::chrono::microseconds(15));
     if (gpiod_line_request_set_value(
         cfg.trig_request, cfg.trig_offset, GPIOD_LINE_VALUE_INACTIVE) < 0)
     {
@@ -492,11 +498,15 @@ cleanup:
       return;
     }
 
-    const double left = median_filtered(left_, read_distance_m(left_));
-    const double right = median_filtered(right_, read_distance_m(right_));
+    if (measure_left_next_) {
+      last_left_range_ = median_filtered(left_, read_distance_m(left_));
+    } else {
+      last_right_range_ = median_filtered(right_, read_distance_m(right_));
+    }
+    measure_left_next_ = !measure_left_next_;
 
-    publish_range(left_pub_, left_.frame, left);
-    publish_range(right_pub_, right_.frame, right);
+    publish_range(left_pub_, left_.frame, last_left_range_);
+    publish_range(right_pub_, right_.frame, last_right_range_);
 
     diagnostics_.force_update();
   }
@@ -508,6 +518,9 @@ cleanup:
 #ifdef HAVE_LIBGPIOD
     stat.add("gpio_chip_path", gpio_chip_path_);
 #endif
+    stat.add("last_left_range", last_left_range_);
+    stat.add("last_right_range", last_right_range_);
+    stat.add("measure_left_next", measure_left_next_);
     stat.add("left_samples", static_cast<int>(left_.history.size()));
     stat.add("right_samples", static_cast<int>(right_.history.size()));
     stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Ultrasonic node active");
