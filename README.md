@@ -17,7 +17,7 @@
 
 ## 1. 当前版本
 
-- **当前可用版本：`alpha-0.0.2`**
+- **当前可用版本：`alpha-0.0.3`**
 - **上一调试快照：`dev-0.0.1.1`**
 - 状态：Usable Alpha（主链路可启动，适合作为首个实机可用版本）
 - 注意：实机使用 Astra 深度相机时，外部 `turn_on_wheeltec_robot/wheeltec_camera.launch.py` 需显式传入 `depth_registration=true`，确保 `/camera/depth/image_raw` 对齐到彩色光学坐标系。
@@ -51,6 +51,60 @@
 - 启动参数回显：YOLO / ReID 输入尺寸、topic、`sync_slop`
 
 ---
+
+### 1.3 alpha-0.0.3 稳定性补丁（2026-03-17）
+
+本轮收尾主要补的是**运行稳定性**和**在线调参能力**，没有改动主链路架构：
+
+- `perception_node`
+  - 已支持参数热更新：模型路径、输入尺寸、同步窗口、话题名修改后可在线重建订阅与发布器。
+  - 模型路径增加自动解析，避免因启动目录不同导致 `models/*.onnx` 找不到。
+- `follower_controller_node`
+  - 已支持在线热更新 `target_timeout`、PID 参数、控制频率、限幅参数和输出话题。
+- `arbiter_node`
+  - 已支持在线热更新状态机阈值、避障防抖参数、搜索角速度、输出话题。
+- `obstacle_avoidance_node`
+  - 已支持在线热更新深度 ROI、百分位、采样步长、动态安全距离参数和输入/输出话题。
+- `ultrasonic_range_node`
+  - 已支持在线热更新频率、GPIO、frame、左右量程话题。
+  - 为规避 active 状态下直接重建 GPIO 资源导致的阻塞，超声波节点改为**参数回调只登记重配置请求，由下一次定时器 tick 完成重建**。
+- 执行器
+  - 控制、避障、仲裁、超声波、感知链路统一固定为 `SingleThreadedExecutor`，降低生命周期切换与定时器/回调交错时的不确定性。
+
+### 1.4 本轮虚拟机自检结果
+
+调试机：`wheeltec@192.168.220.131`
+
+已验证：
+
+1. `smart_follower_control` 在虚拟机上可正常编译：
+   ```bash
+   source /opt/ros/humble/setup.bash
+   cd /home/wheeltec/ros2_smart_follower
+   colcon build --symlink-install --packages-select smart_follower_control
+   ```
+2. `smart_follower_only.launch.py` 可正常拉起各核心节点。
+3. 以下热更新命令已验证成功：
+   ```bash
+   ros2 param set /robot1/follower_controller_node target_timeout 0.40
+   ros2 param set /robot1/arbiter_node search_angular_speed 0.40
+   ros2 param set /robot1/obstacle_avoidance_node depth_sample_stride 4
+   ros2 param set /robot1/ultrasonic_range_node rate 8.0
+   ```
+4. 虚拟机无 GPIO 后端时，超声波节点会降级为 `dry` 模式并持续发布 `inf` 距离；该行为符合预期。
+
+### 1.5 运行时调参注意事项
+
+- 若 `ros2 node list` / `ros2 param ...` 偶发卡住，先执行一次：
+  ```bash
+  ros2 daemon stop
+  ```
+  然后再重新执行查询或设参。
+- 对超声波节点改 GPIO / 频率时，日志中应出现：
+  - `ultrasonic parameters hot-reloaded ...`
+- 对感知节点改同步/模型参数时，日志中应出现：
+  - `parameters hot-reloaded ...`
+- 当前热更新实现目标是**不重启节点完成工程调试**，不是动态无损切换；参数修改时可能清空局部缓存，这是预期行为。
 
 ## 2. 仓库结构
 

@@ -9,14 +9,13 @@
 #include <cv_bridge/cv_bridge.h>
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <lifecycle_msgs/msg/transition.hpp>
 #include <lifecycle_msgs/msg/state.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/range.hpp>
-
-
 
 namespace smart_follower_control
 {
@@ -39,7 +38,6 @@ float percentile(std::vector<float> data, float q)
   return data[lo] * (1.0F - t) + data[hi] * t;
 }
 }  // namespace
-
 
 class ObstacleAvoidanceNode : public rclcpp_lifecycle::LifecycleNode
 {
@@ -95,6 +93,7 @@ private:
     double back_speed{-0.15};
   } p_;
 
+  OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
   rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr left_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr right_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr depth_sub_;
@@ -139,15 +138,44 @@ private:
     p_.back_speed = get_parameter("back_speed").as_double();
   }
 
-  CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
+  void reset_runtime_state()
   {
-    load_parameters();
+    left_dist_ = std::numeric_limits<double>::infinity();
+    right_dist_ = std::numeric_limits<double>::infinity();
+    depth_dist_ = std::numeric_limits<double>::infinity();
+    current_speed_ = 0.0;
+    left_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    right_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    depth_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    depth_message_count_ = 0;
+    depth_process_count_ = 0;
+    std::lock_guard<std::mutex> lock(depth_mutex_);
+    latest_depth_msg_.reset();
+  }
+
+  void recreate_interfaces(bool preserve_activation)
+  {
+    const bool was_active = preserve_activation && avoid_pub_ && avoid_pub_->is_activated();
+    if (was_active) {
+      publish_zero();
+      avoid_pub_->on_deactivate();
+    }
+
+    timer_.reset();
+    left_sub_.reset();
+    right_sub_.reset();
+    depth_sub_.reset();
+    vel_sub_.reset();
+    avoid_pub_.reset();
+    reset_runtime_state();
 
     left_sub_ = create_subscription<sensor_msgs::msg::Range>(
       p_.left_topic,
       rclcpp::SensorDataQoS(),
       [this](const sensor_msgs::msg::Range::SharedPtr msg) {
-        if (!msg) return;
+        if (!msg) {
+          return;
+        }
         left_dist_ = msg->range;
         left_stamp_ = rclcpp::Time(msg->header.stamp);
       });
@@ -156,7 +184,9 @@ private:
       p_.right_topic,
       rclcpp::SensorDataQoS(),
       [this](const sensor_msgs::msg::Range::SharedPtr msg) {
-        if (!msg) return;
+        if (!msg) {
+          return;
+        }
         right_dist_ = msg->range;
         right_stamp_ = rclcpp::Time(msg->header.stamp);
       });
@@ -176,14 +206,25 @@ private:
       });
 
     avoid_pub_ = create_publisher<geometry_msgs::msg::Twist>(p_.cmd_vel_avoid_topic, 10);
-
     timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::duration<double>(1.0 / std::max(1.0, p_.rate))),
       std::bind(&ObstacleAvoidanceNode::on_timer, this));
 
+    if (was_active) {
+      avoid_pub_->on_activate();
+    }
+  }
+
+  CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
+  {
+    load_parameters();
+    recreate_interfaces(false);
+
     diagnostics_.setHardwareID("smart_follower_avoidance");
     diagnostics_.add("avoidance_status", this, &ObstacleAvoidanceNode::diag_callback);
+    param_callback_handle_ = this->add_on_set_parameters_callback(
+      std::bind(&ObstacleAvoidanceNode::on_parameters_set, this, std::placeholders::_1));
 
     return CallbackReturn::SUCCESS;
   }
@@ -196,10 +237,10 @@ private:
 
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override
   {
+    publish_zero();
     if (avoid_pub_) {
       avoid_pub_->on_deactivate();
     }
-    publish_zero();
     return CallbackReturn::SUCCESS;
   }
 
@@ -210,14 +251,67 @@ private:
     right_sub_.reset();
     depth_sub_.reset();
     vel_sub_.reset();
-    {
-      std::lock_guard<std::mutex> lock(depth_mutex_);
-      latest_depth_msg_.reset();
-    }
-    depth_message_count_ = 0;
-    depth_process_count_ = 0;
     avoid_pub_.reset();
+    param_callback_handle_.reset();
+    reset_runtime_state();
     return CallbackReturn::SUCCESS;
+  }
+
+  void apply_parameter_override(Params & target, const rclcpp::Parameter & param)
+  {
+    const auto & name = param.get_name();
+    if (name == "left_range_topic") target.left_topic = param.as_string();
+    else if (name == "right_range_topic") target.right_topic = param.as_string();
+    else if (name == "depth_topic") target.depth_topic = param.as_string();
+    else if (name == "cmd_vel_input_topic") target.cmd_vel_input_topic = param.as_string();
+    else if (name == "cmd_vel_avoid_topic") target.cmd_vel_avoid_topic = param.as_string();
+    else if (name == "rate") target.rate = param.as_double();
+    else if (name == "d_min") target.d_min = param.as_double();
+    else if (name == "t_react") target.t_react = param.as_double();
+    else if (name == "a_brake") target.a_brake = param.as_double();
+    else if (name == "margin") target.margin = param.as_double();
+    else if (name == "exit_margin") target.exit_margin = param.as_double();
+    else if (name == "depth_roi_width_ratio") target.depth_roi_width_ratio = param.as_double();
+    else if (name == "depth_roi_height_ratio") target.depth_roi_height_ratio = param.as_double();
+    else if (name == "depth_percentile") target.depth_percentile = param.as_double();
+    else if (name == "depth_sample_stride") target.depth_sample_stride = static_cast<int>(param.as_int());
+    else if (name == "turn_speed") target.turn_speed = param.as_double();
+    else if (name == "slow_turn_speed") target.slow_turn_speed = param.as_double();
+    else if (name == "back_speed") target.back_speed = param.as_double();
+  }
+
+  rcl_interfaces::msg::SetParametersResult on_parameters_set(
+    const std::vector<rclcpp::Parameter> & params)
+  {
+    Params candidate = p_;
+    for (const auto & param : params) {
+      apply_parameter_override(candidate, param);
+    }
+
+    candidate.rate = std::max(1.0, candidate.rate);
+    candidate.a_brake = std::max(1e-3, candidate.a_brake);
+    candidate.depth_roi_width_ratio = std::clamp(candidate.depth_roi_width_ratio, 0.05, 1.0);
+    candidate.depth_roi_height_ratio = std::clamp(candidate.depth_roi_height_ratio, 0.05, 1.0);
+    candidate.depth_percentile = std::clamp(candidate.depth_percentile, 0.0, 1.0);
+    candidate.depth_sample_stride = std::max(1, candidate.depth_sample_stride);
+
+    p_ = candidate;
+    recreate_interfaces(this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+    RCLCPP_INFO(
+      get_logger(),
+      "[alpha-0.0.2] avoidance parameters hot-reloaded: left=%s right=%s depth=%s cmd=%s rate=%.2f stride=%d",
+      p_.left_topic.c_str(),
+      p_.right_topic.c_str(),
+      p_.depth_topic.c_str(),
+      p_.cmd_vel_avoid_topic.c_str(),
+      p_.rate,
+      p_.depth_sample_stride);
+
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
+    result.reason = "ok";
+    return result;
   }
 
   void on_depth(const sensor_msgs::msg::Image::SharedPtr msg)
@@ -381,15 +475,9 @@ int main(int argc, char ** argv)
   auto node = std::make_shared<smart_follower_control::ObstacleAvoidanceNode>();
   node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
   node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE);
-  rclcpp::executors::MultiThreadedExecutor exec;
+  rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node->get_node_base_interface());
   exec.spin();
   rclcpp::shutdown();
   return 0;
 }
-
-
-
-
-
-

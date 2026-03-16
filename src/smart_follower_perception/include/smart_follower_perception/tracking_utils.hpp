@@ -20,6 +20,7 @@ struct Detection
   float depth_m{0.0F};
   std::array<float, 2048> feature{};
   bool feature_valid{false};
+  int recovered_track_id{-1};
 };
 
 inline double bbox_iou(const cv::Rect2f & a, const cv::Rect2f & b)

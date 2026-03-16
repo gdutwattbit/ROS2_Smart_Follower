@@ -1,11 +1,14 @@
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <lifecycle_msgs/msg/transition.hpp>
@@ -66,6 +69,7 @@ private:
     double avoid_nonzero_epsilon{1e-3};
   } p_;
 
+  OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Subscription<smart_follower_msgs::msg::PersonPoseArray>::SharedPtr pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr follow_sub_;
@@ -111,9 +115,20 @@ private:
     p_.avoid_nonzero_epsilon = get_parameter("avoid_nonzero_epsilon").as_double();
   }
 
-  CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
+  void recreate_interfaces(bool preserve_activation)
   {
-    load_parameters();
+    const bool was_active = preserve_activation && cmd_pub_ && cmd_pub_->is_activated();
+    if (was_active) {
+      publish_zero();
+      cmd_pub_->on_deactivate();
+    }
+
+    timer_.reset();
+    pose_sub_.reset();
+    follow_sub_.reset();
+    avoid_sub_.reset();
+    cmd_sub_.reset();
+    cmd_pub_.reset();
 
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>(p_.cmd_vel_topic, 10);
     pose_sub_ = create_subscription<smart_follower_msgs::msg::PersonPoseArray>(
@@ -138,8 +153,20 @@ private:
       std::chrono::duration_cast<std::chrono::milliseconds>(period),
       std::bind(&ArbiterNode::on_timer, this));
 
+    if (was_active) {
+      cmd_pub_->on_activate();
+    }
+  }
+
+  CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
+  {
+    load_parameters();
+    recreate_interfaces(false);
+
     diagnostics_.setHardwareID("smart_follower_arbiter");
     diagnostics_.add("arbiter_status", this, &ArbiterNode::diag_callback);
+    param_callback_handle_ = this->add_on_set_parameters_callback(
+      std::bind(&ArbiterNode::on_parameters_set, this, std::placeholders::_1));
 
     return CallbackReturn::SUCCESS;
   }
@@ -153,10 +180,10 @@ private:
 
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override
   {
+    publish_zero();
     if (cmd_pub_) {
       cmd_pub_->on_deactivate();
     }
-    publish_zero();
     return CallbackReturn::SUCCESS;
   }
 
@@ -168,7 +195,66 @@ private:
     avoid_sub_.reset();
     cmd_sub_.reset();
     cmd_pub_.reset();
+    param_callback_handle_.reset();
     return CallbackReturn::SUCCESS;
+  }
+
+  void apply_parameter_override(Params & target, const rclcpp::Parameter & param)
+  {
+    const auto & name = param.get_name();
+    if (name == "person_pose_topic") target.person_pose_topic = param.as_string();
+    else if (name == "cmd_vel_follow_topic") target.cmd_vel_follow_topic = param.as_string();
+    else if (name == "cmd_vel_avoid_topic") target.cmd_vel_avoid_topic = param.as_string();
+    else if (name == "follow_command_topic") target.follow_command_topic = param.as_string();
+    else if (name == "cmd_vel_topic") target.cmd_vel_topic = param.as_string();
+    else if (name == "publish_rate") target.publish_rate = param.as_double();
+    else if (name == "lost_time_normal_max") target.thresholds.lost_time_normal_max = param.as_double();
+    else if (name == "lost_time_degraded_max") target.thresholds.lost_time_degraded_max = param.as_double();
+    else if (name == "lost_time_search_max") target.thresholds.lost_time_search_max = param.as_double();
+    else if (name == "degraded_linear_scale") target.degraded_linear_scale = param.as_double();
+    else if (name == "search_angular_speed") target.search_angular_speed = param.as_double();
+    else if (name == "avoid_enter_threshold") target.avoid_enter_threshold = param.as_int();
+    else if (name == "avoid_exit_threshold") target.avoid_exit_threshold = param.as_int();
+    else if (name == "avoid_exit_hysteresis_time") target.avoid_exit_hysteresis_time = param.as_double();
+    else if (name == "avoid_cmd_timeout") target.avoid_cmd_timeout = param.as_double();
+    else if (name == "avoid_nonzero_epsilon") target.avoid_nonzero_epsilon = param.as_double();
+  }
+
+  rcl_interfaces::msg::SetParametersResult on_parameters_set(
+    const std::vector<rclcpp::Parameter> & params)
+  {
+    Params candidate = p_;
+    for (const auto & param : params) {
+      apply_parameter_override(candidate, param);
+    }
+
+    candidate.publish_rate = std::max(1.0, candidate.publish_rate);
+    candidate.thresholds.lost_time_normal_max = std::max(0.0, candidate.thresholds.lost_time_normal_max);
+    candidate.thresholds.lost_time_degraded_max = std::max(candidate.thresholds.lost_time_normal_max, candidate.thresholds.lost_time_degraded_max);
+    candidate.thresholds.lost_time_search_max = std::max(candidate.thresholds.lost_time_degraded_max, candidate.thresholds.lost_time_search_max);
+    candidate.degraded_linear_scale = std::clamp(candidate.degraded_linear_scale, 0.0, 1.0);
+    candidate.avoid_enter_threshold = std::max(1, candidate.avoid_enter_threshold);
+    candidate.avoid_exit_threshold = std::max(1, candidate.avoid_exit_threshold);
+    candidate.avoid_exit_hysteresis_time = std::max(0.0, candidate.avoid_exit_hysteresis_time);
+    candidate.avoid_cmd_timeout = std::max(0.0, candidate.avoid_cmd_timeout);
+    candidate.avoid_nonzero_epsilon = std::max(0.0, candidate.avoid_nonzero_epsilon);
+
+    p_ = candidate;
+    recreate_interfaces(this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+    RCLCPP_INFO(
+      get_logger(),
+      "[alpha-0.0.2] arbiter parameters hot-reloaded: pose=%s follow=%s avoid=%s cmd=%s rate=%.2f",
+      p_.person_pose_topic.c_str(),
+      p_.cmd_vel_follow_topic.c_str(),
+      p_.cmd_vel_avoid_topic.c_str(),
+      p_.cmd_vel_topic.c_str(),
+      p_.publish_rate);
+
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
+    result.reason = "ok";
+    return result;
   }
 
   void on_person_pose(const smart_follower_msgs::msg::PersonPoseArray::SharedPtr msg)
@@ -237,9 +323,16 @@ private:
     if (msg->command == smart_follower_msgs::msg::FollowCommand::ESTOP) {
       stop_latched_ = true;
       mode_ = ArbiterMode::STOP;
+      latest_follow_cmd_ = geometry_msgs::msg::Twist();
+      latest_avoid_cmd_ = geometry_msgs::msg::Twist();
     } else if (msg->command == smart_follower_msgs::msg::FollowCommand::RESET) {
       stop_latched_ = false;
       mode_ = ArbiterMode::STOP;
+      avoid_nonzero_count_ = 0;
+      avoid_zero_count_ = 0;
+      avoid_latched_ = false;
+      latest_follow_cmd_ = geometry_msgs::msg::Twist();
+      latest_avoid_cmd_ = geometry_msgs::msg::Twist();
     }
   }
 
@@ -354,14 +447,9 @@ int main(int argc, char ** argv)
   auto node = std::make_shared<smart_follower_control::ArbiterNode>();
   node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
   node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE);
-  rclcpp::executors::MultiThreadedExecutor exec;
+  rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node->get_node_base_interface());
   exec.spin();
   rclcpp::shutdown();
   return 0;
 }
-
-
-
-
-

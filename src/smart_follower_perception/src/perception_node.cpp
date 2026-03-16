@@ -2,9 +2,11 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <cmath>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <limits>
 #include <mutex>
@@ -47,10 +49,70 @@ namespace smart_follower_perception
 
 namespace
 {
+namespace fs = std::filesystem;
 constexpr int kStateDim = 10;
 constexpr int kMeasureDim = 4;
 constexpr int kFeatureDim = 2048;
-constexpr char kRuntimeVersion[] = "alpha-0.0.1.2";
+constexpr char kRuntimeVersion[] = "alpha-0.0.2";
+
+std::string resolve_model_path(const std::string & input_path)
+{
+  if (input_path.empty()) {
+    return input_path;
+  }
+
+  fs::path relative_path(input_path);
+  std::error_code ec;
+  auto try_candidate = [&](const fs::path & base) -> std::string {
+    if (base.empty()) {
+      return {};
+    }
+    fs::path candidate = base / relative_path;
+    if (fs::exists(candidate, ec)) {
+      return fs::weakly_canonical(candidate, ec).string();
+    }
+    return {};
+  };
+
+  if (relative_path.is_absolute() && fs::exists(relative_path, ec)) {
+    return fs::weakly_canonical(relative_path, ec).string();
+  }
+
+  std::vector<fs::path> roots;
+  fs::path cwd = fs::current_path(ec);
+  if (!ec) {
+    roots.push_back(cwd);
+    for (fs::path cur = cwd; !cur.empty() && cur != cur.root_path(); cur = cur.parent_path()) {
+      roots.push_back(cur);
+    }
+  }
+
+  if (const char * prefix = std::getenv("COLCON_CURRENT_PREFIX")) {
+    fs::path prefix_path(prefix);
+    roots.push_back(prefix_path);
+    roots.push_back(prefix_path.parent_path());
+    roots.push_back(prefix_path.parent_path().parent_path());
+  }
+
+#ifdef __linux__
+  fs::path exe = fs::read_symlink("/proc/self/exe", ec);
+  if (!ec && !exe.empty()) {
+    exe = exe.parent_path();
+    roots.push_back(exe);
+    for (fs::path cur = exe; !cur.empty() && cur != cur.root_path(); cur = cur.parent_path()) {
+      roots.push_back(cur);
+    }
+  }
+#endif
+
+  for (const auto & root : roots) {
+    if (auto resolved = try_candidate(root); !resolved.empty()) {
+      return resolved;
+    }
+  }
+
+  return input_path;
+}
 }  // namespace
 
 struct MemoryEntry
@@ -108,7 +170,13 @@ public:
     person_class_id_ = person_class_id;
     conf_threshold_ = conf_threshold;
 #ifdef HAVE_ONNXRUNTIME
-    init_runtime();
+    session_.reset();
+    try {
+      init_runtime();
+    } catch (const Ort::Exception & ex) {
+      std::fprintf(stderr, "[smart_follower][yolo] load model failed (%s): %s\n", model_path_.c_str(), ex.what());
+      session_.reset();
+    }
 #else
     (void)model_path_;
 #endif
@@ -293,7 +361,13 @@ public:
     output_dim_mismatch_ = false;
     output_dim_error_msg_.clear();
 #ifdef HAVE_ONNXRUNTIME
-    init_runtime();
+    session_.reset();
+    try {
+      init_runtime();
+    } catch (const Ort::Exception & ex) {
+      std::fprintf(stderr, "[smart_follower][reid] load model failed (%s): %s\n", model_path_.c_str(), ex.what());
+      session_.reset();
+    }
 #else
     (void)model_path_;
 #endif
@@ -531,6 +605,7 @@ private:
 
   int lock_id_{-1};
   uint8_t lock_state_{smart_follower_msgs::msg::PersonPoseArray::IDLE};
+  rclcpp::Time last_lock_confirmed_time_{0, 0, RCL_ROS_TIME};
   bool pending_lock_request_{false};
   int pending_stable_track_{-1};
   int pending_stable_count_{0};
@@ -829,12 +904,36 @@ private:
     p_.lock_target_area_ratio = this->get_parameter("lock.target_area_ratio").as_double();
   }
 
-  CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
+  void clear_sync_cache()
   {
-    load_parameters();
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    color_cache_.clear();
+    depth_cache_.clear();
+    info_cache_.clear();
+    last_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  }
 
+  void configure_models()
+  {
+    p_.yolo_model_path = resolve_model_path(p_.yolo_model_path);
+    p_.reid_model_path = resolve_model_path(p_.reid_model_path);
     yolo_.configure(p_.yolo_model_path, p_.yolo_input_w, p_.yolo_input_h, p_.person_class_id, p_.yolo_conf_threshold);
     reid_.configure(p_.reid_model_path, p_.reid_input_w, p_.reid_input_h);
+  }
+
+  void recreate_interfaces(bool preserve_activation)
+  {
+    const bool was_active = preserve_activation && person_pub_ && person_pub_->is_activated();
+    if (was_active) {
+      person_pub_->on_deactivate();
+    }
+
+    color_sub_.reset();
+    depth_sub_.reset();
+    info_sub_.reset();
+    command_sub_.reset();
+    person_pub_.reset();
+    clear_sync_cache();
 
     person_pub_ = this->create_publisher<smart_follower_msgs::msg::PersonPoseArray>(p_.person_pose_topic, rclcpp::SystemDefaultsQoS());
     command_sub_ = this->create_subscription<smart_follower_msgs::msg::FollowCommand>(
@@ -854,6 +953,18 @@ private:
       p_.camera_info_topic,
       rclcpp::SensorDataQoS(),
       std::bind(&PerceptionNode::on_info_message, this, std::placeholders::_1));
+
+    if (was_active) {
+      person_pub_->on_activate();
+    }
+  }
+
+  CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
+  {
+    load_parameters();
+
+    configure_models();
+    recreate_interfaces(false);
 
     diagnostics_.setHardwareID("smart_follower_perception");
     diagnostics_.add("perception_status", this, &PerceptionNode::diagnostics_callback);
@@ -907,12 +1018,78 @@ private:
     last_color_msg_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     last_depth_msg_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     last_info_msg_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    last_lock_confirmed_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     return CallbackReturn::SUCCESS;
   }
 
-  rcl_interfaces::msg::SetParametersResult on_parameters_set(const std::vector<rclcpp::Parameter> &)
+  void apply_parameter_override(Params & target, const rclcpp::Parameter & param)
   {
-    load_parameters();
+    const auto & name = param.get_name();
+    if (name == "color_topic") target.color_topic = param.as_string();
+    else if (name == "depth_topic") target.depth_topic = param.as_string();
+    else if (name == "camera_info_topic") target.camera_info_topic = param.as_string();
+    else if (name == "person_pose_topic") target.person_pose_topic = param.as_string();
+    else if (name == "follow_command_topic") target.follow_command_topic = param.as_string();
+    else if (name == "base_frame") target.base_frame = param.as_string();
+    else if (name == "yolo.model_path") target.yolo_model_path = param.as_string();
+    else if (name == "yolo.input_w") target.yolo_input_w = param.as_int();
+    else if (name == "yolo.input_h") target.yolo_input_h = param.as_int();
+    else if (name == "yolo.person_class_id") target.person_class_id = param.as_int();
+    else if (name == "yolo.conf_threshold") target.yolo_conf_threshold = param.as_double();
+    else if (name == "reid.model_path") target.reid_model_path = param.as_string();
+    else if (name == "reid.input_w") target.reid_input_w = param.as_int();
+    else if (name == "reid.input_h") target.reid_input_h = param.as_int();
+    else if (name == "reid.ema_alpha") target.ema_alpha = param.as_double();
+    else if (name == "reid.recover_threshold") target.reid_recover_threshold = param.as_double();
+    else if (name == "sync_slop") target.sync_slop = param.as_double();
+    else if (name == "process_every_n_frames") target.process_every_n_frames = std::max<int>(1, static_cast<int>(param.as_int()));
+    else if (name == "detect_every_n_frames") target.detect_every_n_frames = std::max<int>(1, static_cast<int>(param.as_int()));
+    else if (name == "min_confirm_hits") target.min_confirm_hits = param.as_int();
+    else if (name == "max_miss_frames") target.max_miss_frames = param.as_int();
+    else if (name == "feature_buffer_size") target.feature_buffer_size = std::max<int>(1, static_cast<int>(param.as_int()));
+    else if (name == "sync_cache_size") target.sync_cache_size = std::max<int>(3, static_cast<int>(param.as_int()));
+    else if (name == "memory_sec") target.memory_sec = param.as_double();
+    else if (name == "tracking.low_score_threshold") target.low_score_threshold = param.as_double();
+    else if (name == "tracking.high_score_threshold") target.high_score_threshold = param.as_double();
+    else if (name == "tracking.assignment_threshold") target.assignment_threshold = param.as_double();
+    else if (name == "tracking.second_stage_threshold") target.second_stage_threshold = param.as_double();
+    else if (name == "tracking.depth_gate_m") target.depth_gate_m = param.as_double();
+    else if (name == "tracking.depth_norm_m") target.depth_norm_m = param.as_double();
+    else if (name == "tracking.weights.iou") target.weights.w_iou = param.as_double();
+    else if (name == "tracking.weights.center") target.weights.w_center = param.as_double();
+    else if (name == "tracking.weights.depth") target.weights.w_depth = param.as_double();
+    else if (name == "tracking.weights.appearance") target.weights.w_appearance = param.as_double();
+    else if (name == "depth.min_m") target.depth_min_m = param.as_double();
+    else if (name == "depth.max_m") target.depth_max_m = param.as_double();
+    else if (name == "lock.stable_frames") target.lock_stable_frames = std::max<int>(1, static_cast<int>(param.as_int()));
+    else if (name == "lock.hold_sec") target.lock_hold_sec = param.as_double();
+    else if (name == "lock.switch_sec") target.lock_switch_sec = param.as_double();
+    else if (name == "lock.center_roi_ratio") target.lock_center_roi_ratio = param.as_double();
+    else if (name == "lock.target_area_ratio") target.lock_target_area_ratio = param.as_double();
+  }
+
+  rcl_interfaces::msg::SetParametersResult on_parameters_set(const std::vector<rclcpp::Parameter> & params)
+  {
+    Params candidate = p_;
+    for (const auto & param : params) {
+      apply_parameter_override(candidate, param);
+    }
+    p_ = candidate;
+    configure_models();
+    recreate_interfaces(this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+    RCLCPP_INFO(
+      get_logger(),
+      "[%s] parameters hot-reloaded: color=%s depth=%s info=%s person_pose=%s yolo=%s reid=%s sync_slop=%.3f",
+      kRuntimeVersion,
+      p_.color_topic.c_str(),
+      p_.depth_topic.c_str(),
+      p_.camera_info_topic.c_str(),
+      p_.person_pose_topic.c_str(),
+      p_.yolo_model_path.c_str(),
+      p_.reid_model_path.c_str(),
+      p_.sync_slop);
+
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = true;
     result.reason = "ok";
@@ -929,6 +1106,7 @@ private:
         if (msg->target_id >= 0) {
           lock_id_ = msg->target_id;
           lock_state_ = smart_follower_msgs::msg::PersonPoseArray::LOCKED;
+          last_lock_confirmed_time_ = last_stamp_;
           pending_lock_request_ = false;
         } else {
           pending_lock_request_ = true;
@@ -939,11 +1117,13 @@ private:
       case smart_follower_msgs::msg::FollowCommand::UNLOCK:
         lock_id_ = -1;
         lock_state_ = smart_follower_msgs::msg::PersonPoseArray::IDLE;
+        last_lock_confirmed_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
         pending_lock_request_ = false;
         break;
       case smart_follower_msgs::msg::FollowCommand::RESET:
         lock_id_ = -1;
         lock_state_ = smart_follower_msgs::msg::PersonPoseArray::IDLE;
+        last_lock_confirmed_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
         pending_lock_request_ = false;
         tracks_.clear();
         memory_bank_.clear();
@@ -970,7 +1150,12 @@ private:
   Track create_track(const Detection & det, const rclcpp::Time & stamp)
   {
     Track track;
-    track.id = next_track_id_++;
+    if (det.recovered_track_id >= 0 && tracks_.find(det.recovered_track_id) == tracks_.end()) {
+      track.id = det.recovered_track_id;
+      next_track_id_ = std::max(next_track_id_, det.recovered_track_id + 1);
+    } else {
+      track.id = next_track_id_++;
+    }
     track.state = smart_follower_msgs::msg::TrackedPerson::TENTATIVE;
     track.confidence = det.confidence;
     track.bbox = det.bbox;
@@ -1138,19 +1323,44 @@ private:
     if (!det.feature_valid) {
       return std::nullopt;
     }
+
+    const int preferred_id = lock_id_;
     int best_id = -1;
     double best_sim = -1.0;
     for (const auto & entry : memory_bank_) {
+      if (preferred_id >= 0 && entry.track_id != preferred_id) {
+        continue;
+      }
       const double sim = 1.0 - cosine_distance(entry.feature, det.feature);
       if (sim > best_sim) {
         best_sim = sim;
         best_id = entry.track_id;
       }
     }
+
+    if (best_id < 0 && preferred_id < 0) {
+      for (const auto & entry : memory_bank_) {
+        const double sim = 1.0 - cosine_distance(entry.feature, det.feature);
+        if (sim > best_sim) {
+          best_sim = sim;
+          best_id = entry.track_id;
+        }
+      }
+    }
+
     if (best_id >= 0 && best_sim >= p_.reid_recover_threshold) {
       return best_id;
     }
     return std::nullopt;
+  }
+
+  void remove_memory_entry(int track_id)
+  {
+    memory_bank_.erase(
+      std::remove_if(
+        memory_bank_.begin(), memory_bank_.end(),
+        [track_id](const MemoryEntry & entry) { return entry.track_id == track_id; }),
+      memory_bank_.end());
   }
 
   std::optional<geometry_msgs::msg::Point> pixel_to_base_point(const cv::Rect2f & bbox, float depth_m, const std_msgs::msg::Header & header)
@@ -1179,15 +1389,18 @@ private:
     }
   }
 
-  void handle_lock_logic(const cv::Size & image_size)
+  void handle_lock_logic(const cv::Size & image_size, const rclcpp::Time & stamp)
   {
     if (pending_lock_request_) {
+      const double lost_for = last_lock_confirmed_time_.nanoseconds() > 0 ? (stamp - last_lock_confirmed_time_).seconds() : std::numeric_limits<double>::infinity();
+      const bool allow_switch = lock_id_ < 0 || lost_for >= p_.lock_switch_sec;
       int best_track = -1;
       double best_score = -1.0;
       const float roi_w = static_cast<float>(image_size.width) * p_.lock_center_roi_ratio;
       const float roi_h = static_cast<float>(image_size.height) * p_.lock_center_roi_ratio;
       const cv::Rect2f roi((image_size.width - roi_w) * 0.5F, (image_size.height - roi_h) * 0.5F, roi_w, roi_h);
 
+      if (allow_switch) {
       for (auto & [id, t] : tracks_) {
         if (t.state != smart_follower_msgs::msg::TrackedPerson::CONFIRMED) {
           continue;
@@ -1211,6 +1424,7 @@ private:
           best_score = score;
           best_track = id;
         }
+      }
       }
 
       if (best_track >= 0) {
@@ -1236,15 +1450,25 @@ private:
 
     if (lock_id_ >= 0) {
       auto it = tracks_.find(lock_id_);
-      lock_state_ = (it != tracks_.end() && it->second.state == smart_follower_msgs::msg::TrackedPerson::CONFIRMED)
-                    ? smart_follower_msgs::msg::PersonPoseArray::LOCKED
-                    : smart_follower_msgs::msg::PersonPoseArray::LOST;
+      if (it != tracks_.end() && it->second.state == smart_follower_msgs::msg::TrackedPerson::CONFIRMED) {
+        lock_state_ = smart_follower_msgs::msg::PersonPoseArray::LOCKED;
+        last_lock_confirmed_time_ = stamp;
+      } else {
+        const double lost_for = last_lock_confirmed_time_.nanoseconds() > 0 ? (stamp - last_lock_confirmed_time_).seconds() : std::numeric_limits<double>::infinity();
+        lock_state_ = lost_for <= p_.lock_hold_sec
+          ? smart_follower_msgs::msg::PersonPoseArray::LOCKED
+          : smart_follower_msgs::msg::PersonPoseArray::LOST;
+      }
     } else {
       lock_state_ = smart_follower_msgs::msg::PersonPoseArray::IDLE;
     }
   }
 
-  void run_tracking(std::vector<Detection> detections, const cv::Size & image_size, const rclcpp::Time & stamp)
+  void run_tracking(
+    std::vector<Detection> detections,
+    const cv::Size & image_size,
+    const rclcpp::Time & stamp,
+    bool detections_available)
   {
     float dt = 0.1F;
     if (last_stamp_.nanoseconds() > 0) {
@@ -1254,6 +1478,11 @@ private:
 
     for (auto & kv : tracks_) {
       predict_track(kv.second, dt);
+    }
+
+    if (!detections_available) {
+      update_memory_bank(stamp);
+      return;
     }
 
     std::vector<Detection> high_det;
@@ -1306,6 +1535,10 @@ private:
     for (int det_idx : a1.unmatched_cols) {
       auto t = create_track(high_det[det_idx], stamp);
       tracks_.insert({t.id, t});
+      if (high_det[det_idx].recovered_track_id >= 0) {
+        remove_memory_entry(high_det[det_idx].recovered_track_id);
+        lock_id_ = t.id;
+      }
     }
 
     std::unordered_map<int, bool> updated;
@@ -1360,9 +1593,9 @@ private:
       msg.position.z = std::numeric_limits<double>::quiet_NaN();
     }
 
-    msg.velocity.x = track.kf.statePost.at<float>(5, 0);
-    msg.velocity.y = track.kf.statePost.at<float>(6, 0);
-    msg.velocity.z = track.kf.statePost.at<float>(7, 0);
+    msg.velocity.x = 0.0;
+    msg.velocity.y = 0.0;
+    msg.velocity.z = 0.0;
     msg.depth_m = track.depth_m;
     if (track.feature_valid) {
       for (int i = 0; i < kFeatureDim; ++i) {
@@ -1443,8 +1676,7 @@ private:
         if (lock_state_ == smart_follower_msgs::msg::PersonPoseArray::LOST && feature_valid) {
           auto recovered = try_recover_lock_from_memory(d, rclcpp::Time(color_msg->header.stamp));
           if (recovered.has_value()) {
-            lock_id_ = recovered.value();
-            lock_state_ = smart_follower_msgs::msg::PersonPoseArray::LOCKED;
+            d.recovered_track_id = recovered.value();
           }
         }
 
@@ -1457,8 +1689,8 @@ private:
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "%s", reid_dim_error.c_str());
     }
 
-    run_tracking(detections, color.size(), rclcpp::Time(color_msg->header.stamp));
-    handle_lock_logic(color.size());
+    run_tracking(detections, color.size(), rclcpp::Time(color_msg->header.stamp), run_detect);
+    handle_lock_logic(color.size(), rclcpp::Time(color_msg->header.stamp));
 
     smart_follower_msgs::msg::PersonPoseArray out;
     out.header = color_msg->header;
@@ -1496,6 +1728,7 @@ private:
     stat.add("last_infer_ms", last_infer_ms_);
     stat.add("lock_id", lock_id_);
     stat.add("lock_state", static_cast<int>(lock_state_));
+    stat.add("lock_age_s", last_lock_confirmed_time_.nanoseconds() > 0 ? (now() - last_lock_confirmed_time_).seconds() : -1.0);
     stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Perception healthy");
   }
 };
@@ -1508,7 +1741,7 @@ int main(int argc, char ** argv)
   auto node = std::make_shared<smart_follower_perception::PerceptionNode>();
   node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
   node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE);
-  rclcpp::executors::MultiThreadedExecutor executor;
+  rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
   executor.spin();
   rclcpp::shutdown();

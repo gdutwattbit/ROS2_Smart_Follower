@@ -3,9 +3,12 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <lifecycle_msgs/msg/transition.hpp>
@@ -30,6 +33,7 @@ public:
 
     declare_parameter("target_distance", 1.0);
     declare_parameter("theta_deadzone", 0.03);
+    declare_parameter("target_timeout", 0.3);
 
     declare_parameter("pid_r.kp", 0.8);
     declare_parameter("pid_r.ki", 0.0);
@@ -54,6 +58,7 @@ private:
     double control_rate{20.0};
     double target_distance{1.0};
     double theta_deadzone{0.03};
+    double target_timeout{0.3};
 
     double kp_r{0.8};
     double ki_r{0.0};
@@ -83,6 +88,7 @@ private:
   PID pid_r_;
   PID pid_t_;
 
+  OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Subscription<smart_follower_msgs::msg::PersonPoseArray>::SharedPtr pose_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -98,6 +104,7 @@ private:
 
     p_.target_distance = get_parameter("target_distance").as_double();
     p_.theta_deadzone = get_parameter("theta_deadzone").as_double();
+    p_.target_timeout = get_parameter("target_timeout").as_double();
 
     p_.kp_r = get_parameter("pid_r.kp").as_double();
     p_.ki_r = get_parameter("pid_r.ki").as_double();
@@ -113,13 +120,26 @@ private:
     p_.dv_max = get_parameter("limits.dv_max").as_double();
     p_.dw_max = get_parameter("limits.dw_max").as_double();
 
+    configure_controllers();
+  }
+
+  void configure_controllers()
+  {
     pid_r_.configure(p_.kp_r, p_.ki_r, p_.kd_r, p_.i_limit, p_.kaw);
     pid_t_.configure(p_.kp_t, p_.ki_t, p_.kd_t, p_.i_limit, p_.kaw);
   }
 
-  CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
+  void recreate_interfaces(bool preserve_activation)
   {
-    load_parameters();
+    const bool was_active = preserve_activation && cmd_pub_ && cmd_pub_->is_activated();
+    if (was_active) {
+      publish_zero();
+      cmd_pub_->on_deactivate();
+    }
+
+    timer_.reset();
+    pose_sub_.reset();
+    cmd_pub_.reset();
 
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>(p_.cmd_vel_follow_topic, 10);
     pose_sub_ = create_subscription<smart_follower_msgs::msg::PersonPoseArray>(
@@ -132,8 +152,20 @@ private:
       std::chrono::duration_cast<std::chrono::milliseconds>(period),
       std::bind(&FollowerControllerNode::on_timer, this));
 
+    if (was_active) {
+      cmd_pub_->on_activate();
+    }
+  }
+
+  CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
+  {
+    load_parameters();
+    recreate_interfaces(false);
+
     diagnostics_.setHardwareID("smart_follower_controller");
     diagnostics_.add("follow_controller", this, &FollowerControllerNode::diag_callback);
+    param_callback_handle_ = this->add_on_set_parameters_callback(
+      std::bind(&FollowerControllerNode::on_parameters_set, this, std::placeholders::_1));
 
     return CallbackReturn::SUCCESS;
   }
@@ -146,10 +178,10 @@ private:
 
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override
   {
+    publish_zero();
     if (cmd_pub_) {
       cmd_pub_->on_deactivate();
     }
-    publish_zero();
     return CallbackReturn::SUCCESS;
   }
 
@@ -158,18 +190,76 @@ private:
     timer_.reset();
     pose_sub_.reset();
     cmd_pub_.reset();
+    param_callback_handle_.reset();
     return CallbackReturn::SUCCESS;
+  }
+
+  void apply_parameter_override(Params & target, const rclcpp::Parameter & param)
+  {
+    const auto & name = param.get_name();
+    if (name == "person_pose_topic") target.person_pose_topic = param.as_string();
+    else if (name == "cmd_vel_follow_topic") target.cmd_vel_follow_topic = param.as_string();
+    else if (name == "control_rate") target.control_rate = param.as_double();
+    else if (name == "target_distance") target.target_distance = param.as_double();
+    else if (name == "theta_deadzone") target.theta_deadzone = param.as_double();
+    else if (name == "target_timeout") target.target_timeout = param.as_double();
+    else if (name == "pid_r.kp") target.kp_r = param.as_double();
+    else if (name == "pid_r.ki") target.ki_r = param.as_double();
+    else if (name == "pid_r.kd") target.kd_r = param.as_double();
+    else if (name == "pid_t.kp") target.kp_t = param.as_double();
+    else if (name == "pid_t.ki") target.ki_t = param.as_double();
+    else if (name == "pid_t.kd") target.kd_t = param.as_double();
+    else if (name == "pid_i_limit") target.i_limit = param.as_double();
+    else if (name == "pid_kaw") target.kaw = param.as_double();
+    else if (name == "limits.v_max") target.v_max = param.as_double();
+    else if (name == "limits.w_max") target.w_max = param.as_double();
+    else if (name == "limits.dv_max") target.dv_max = param.as_double();
+    else if (name == "limits.dw_max") target.dw_max = param.as_double();
+  }
+
+  rcl_interfaces::msg::SetParametersResult on_parameters_set(
+    const std::vector<rclcpp::Parameter> & params)
+  {
+    Params candidate = p_;
+    for (const auto & param : params) {
+      apply_parameter_override(candidate, param);
+    }
+
+    candidate.control_rate = std::max(1.0, candidate.control_rate);
+    candidate.target_timeout = std::max(0.0, candidate.target_timeout);
+    candidate.theta_deadzone = std::max(0.0, candidate.theta_deadzone);
+    candidate.i_limit = std::max(0.0, candidate.i_limit);
+    candidate.v_max = std::max(0.0, candidate.v_max);
+    candidate.w_max = std::max(0.0, candidate.w_max);
+    candidate.dv_max = std::max(0.0, candidate.dv_max);
+    candidate.dw_max = std::max(0.0, candidate.dw_max);
+
+    p_ = candidate;
+    configure_controllers();
+    recreate_interfaces(this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+    RCLCPP_INFO(
+      get_logger(),
+      "[alpha-0.0.2] controller parameters hot-reloaded: pose=%s cmd=%s rate=%.2f timeout=%.2f",
+      p_.person_pose_topic.c_str(),
+      p_.cmd_vel_follow_topic.c_str(),
+      p_.control_rate,
+      p_.target_timeout);
+
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
+    result.reason = "ok";
+    return result;
   }
 
   void on_pose(const smart_follower_msgs::msg::PersonPoseArray::SharedPtr msg)
   {
-    if (!msg) {
-      return;
-    }
-    if (msg->lock_id < 0) {
+    if (!msg || msg->lock_id < 0) {
+      last_target_.valid = false;
       return;
     }
 
+    bool updated = false;
     for (const auto & p : msg->persons) {
       if (p.track_id != msg->lock_id) {
         continue;
@@ -183,11 +273,16 @@ private:
 
       last_target_.x = p.position.x;
       last_target_.y = p.position.y;
-      last_target_.vx = p.velocity.x;
-      last_target_.vy = p.velocity.y;
+      last_target_.vx = 0.0;
+      last_target_.vy = 0.0;
       last_target_.stamp = rclcpp::Time(msg->header.stamp);
       last_target_.valid = true;
+      updated = true;
       break;
+    }
+
+    if (!updated) {
+      last_target_.valid = false;
     }
   }
 
@@ -197,14 +292,13 @@ private:
       return std::nullopt;
     }
 
-    TargetState t = last_target_;
-    const double dt = (now - last_target_.stamp).seconds();
-    if (dt > 0.0) {
-      t.x += t.vx * dt;
-      t.y += t.vy * dt;
-      t.stamp = now;
+    const double age = (now - last_target_.stamp).seconds();
+    if (age < 0.0 || age > p_.target_timeout) {
+      last_target_.valid = false;
+      return std::nullopt;
     }
-    return t;
+
+    return last_target_;
   }
 
   void on_timer()
@@ -261,6 +355,8 @@ private:
 
   void publish_zero()
   {
+    pid_r_.reset();
+    pid_t_.reset();
     geometry_msgs::msg::Twist cmd;
     last_cmd_ = cmd;
     if (cmd_pub_ && cmd_pub_->is_activated()) {
@@ -285,14 +381,9 @@ int main(int argc, char ** argv)
   auto node = std::make_shared<smart_follower_control::FollowerControllerNode>();
   node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
   node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE);
-  rclcpp::executors::MultiThreadedExecutor exec;
+  rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node->get_node_base_interface());
   exec.spin();
   rclcpp::shutdown();
   return 0;
 }
-
-
-
-
-

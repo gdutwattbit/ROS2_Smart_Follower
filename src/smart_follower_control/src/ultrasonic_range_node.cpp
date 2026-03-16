@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <diagnostic_updater/diagnostic_updater.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <lifecycle_msgs/msg/transition.hpp>
@@ -40,8 +41,8 @@ public:
 
     declare_parameter("left.trig_pin", 23);
     declare_parameter("left.echo_pin", 24);
-    declare_parameter("right.trig_pin", 27);
-    declare_parameter("right.echo_pin", 22);
+    declare_parameter("right.trig_pin", 4);
+    declare_parameter("right.echo_pin", 14);
 
     declare_parameter("left.topic", std::string("left_ultrasonic/range"));
     declare_parameter("right.topic", std::string("right_ultrasonic/range"));
@@ -70,15 +71,19 @@ private:
   double min_range_{0.03};
   double max_range_{3.0};
 
+  OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Range>::SharedPtr left_pub_;
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Range>::SharedPtr right_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
   diagnostic_updater::Updater diagnostics_{this};
 
+  bool reconfigure_pending_{false};
   bool gpio_ok_{false};
   std::string gpio_backend_{"dry"};
   double last_left_range_{std::numeric_limits<double>::infinity()};
   double last_right_range_{std::numeric_limits<double>::infinity()};
+  rclcpp::Time last_left_measure_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_right_measure_stamp_{0, 0, RCL_ROS_TIME};
   bool measure_left_next_{true};
 #ifdef HAVE_LIBGPIOD
   std::string gpio_chip_path_;
@@ -102,68 +107,22 @@ private:
     right_.frame = get_parameter("frame_right").as_string();
   }
 
-  CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
+  void reset_runtime_state()
   {
-    load_parameters();
-
-    left_pub_ = create_publisher<sensor_msgs::msg::Range>(left_.topic, 10);
-    right_pub_ = create_publisher<sensor_msgs::msg::Range>(right_.topic, 10);
-
-#ifdef HAVE_LIBGPIOD
-    gpio_ok_ = setup_gpiod_backend();
-    gpio_backend_ = gpio_ok_ ? "libgpiod" : "dry";
-#else
-    gpio_ok_ = false;
-    gpio_backend_ = "dry";
-#endif
-
-    if (!gpio_ok_) {
-      RCLCPP_WARN(
-        get_logger(),
-        "No usable GPIO backend available, ultrasonic node will publish inf ranges.");
-    }
-
-    timer_ = create_wall_timer(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::duration<double>(1.0 / std::max(1.0, rate_))),
-      std::bind(&UltrasonicRangeNode::on_timer, this));
-
-    diagnostics_.setHardwareID("smart_follower_ultrasonic");
-    diagnostics_.add("ultrasonic_status", this, &UltrasonicRangeNode::diag_callback);
-
-    return CallbackReturn::SUCCESS;
-  }
-
-  CallbackReturn on_activate(const rclcpp_lifecycle::State &) override
-  {
-    left_pub_->on_activate();
-    right_pub_->on_activate();
-    return CallbackReturn::SUCCESS;
-  }
-
-  CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override
-  {
-    if (left_pub_) left_pub_->on_deactivate();
-    if (right_pub_) right_pub_->on_deactivate();
-    return CallbackReturn::SUCCESS;
-  }
-
-  CallbackReturn on_cleanup(const rclcpp_lifecycle::State &) override
-  {
-    timer_.reset();
-    left_pub_.reset();
-    right_pub_.reset();
 #ifdef HAVE_LIBGPIOD
     release_sensor(left_);
     release_sensor(right_);
     gpio_chip_path_.clear();
 #endif
+    left_.history.clear();
+    right_.history.clear();
     gpio_ok_ = false;
     gpio_backend_ = "dry";
     last_left_range_ = std::numeric_limits<double>::infinity();
     last_right_range_ = std::numeric_limits<double>::infinity();
+    last_left_measure_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    last_right_measure_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     measure_left_next_ = true;
-    return CallbackReturn::SUCCESS;
   }
 
 #ifdef HAVE_LIBGPIOD
@@ -406,6 +365,148 @@ cleanup:
   }
 #endif
 
+  void recreate_interfaces(bool preserve_activation)
+  {
+    const bool was_active = preserve_activation && left_pub_ && right_pub_ &&
+      left_pub_->is_activated() && right_pub_->is_activated();
+    if (was_active) {
+      left_pub_->on_deactivate();
+      right_pub_->on_deactivate();
+    }
+
+    timer_.reset();
+    left_pub_.reset();
+    right_pub_.reset();
+    reset_runtime_state();
+
+    left_pub_ = create_publisher<sensor_msgs::msg::Range>(left_.topic, 10);
+    right_pub_ = create_publisher<sensor_msgs::msg::Range>(right_.topic, 10);
+
+#ifdef HAVE_LIBGPIOD
+    gpio_ok_ = setup_gpiod_backend();
+    gpio_backend_ = gpio_ok_ ? "libgpiod" : "dry";
+#else
+    gpio_ok_ = false;
+    gpio_backend_ = "dry";
+#endif
+
+    if (!gpio_ok_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "No usable GPIO backend available, ultrasonic node will publish inf ranges.");
+    }
+
+    timer_ = create_wall_timer(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::duration<double>(1.0 / std::max(1.0, rate_))),
+      std::bind(&UltrasonicRangeNode::on_timer, this));
+
+    if (was_active) {
+      left_pub_->on_activate();
+      right_pub_->on_activate();
+    }
+  }
+
+  CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
+  {
+    load_parameters();
+    recreate_interfaces(false);
+
+    diagnostics_.setHardwareID("smart_follower_ultrasonic");
+    diagnostics_.add("ultrasonic_status", this, &UltrasonicRangeNode::diag_callback);
+    param_callback_handle_ = this->add_on_set_parameters_callback(
+      std::bind(&UltrasonicRangeNode::on_parameters_set, this, std::placeholders::_1));
+
+    return CallbackReturn::SUCCESS;
+  }
+
+  CallbackReturn on_activate(const rclcpp_lifecycle::State &) override
+  {
+    left_pub_->on_activate();
+    right_pub_->on_activate();
+    return CallbackReturn::SUCCESS;
+  }
+
+  CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override
+  {
+    if (left_pub_) {
+      left_pub_->on_deactivate();
+    }
+    if (right_pub_) {
+      right_pub_->on_deactivate();
+    }
+    return CallbackReturn::SUCCESS;
+  }
+
+  CallbackReturn on_cleanup(const rclcpp_lifecycle::State &) override
+  {
+    timer_.reset();
+    left_pub_.reset();
+    right_pub_.reset();
+    param_callback_handle_.reset();
+    reset_runtime_state();
+    reconfigure_pending_ = false;
+    return CallbackReturn::SUCCESS;
+  }
+
+  void apply_parameter_override(const rclcpp::Parameter & param)
+  {
+    const auto & name = param.get_name();
+    if (name == "rate") rate_ = param.as_double();
+    else if (name == "window_size") window_size_ = static_cast<int>(param.as_int());
+    else if (name == "max_range") max_range_ = param.as_double();
+    else if (name == "min_range") min_range_ = param.as_double();
+    else if (name == "left.trig_pin") left_.trig_pin = param.as_int();
+    else if (name == "left.echo_pin") left_.echo_pin = param.as_int();
+    else if (name == "right.trig_pin") right_.trig_pin = param.as_int();
+    else if (name == "right.echo_pin") right_.echo_pin = param.as_int();
+    else if (name == "left.topic") left_.topic = param.as_string();
+    else if (name == "right.topic") right_.topic = param.as_string();
+    else if (name == "frame_left") left_.frame = param.as_string();
+    else if (name == "frame_right") right_.frame = param.as_string();
+  }
+
+  void log_hot_reload()
+  {
+    RCLCPP_INFO(
+      get_logger(),
+      "[alpha-0.0.2] ultrasonic parameters hot-reloaded: rate=%.2f left=(%d,%d,%s) right=(%d,%d,%s) backend=%s",
+      rate_,
+      left_.trig_pin,
+      left_.echo_pin,
+      left_.topic.c_str(),
+      right_.trig_pin,
+      right_.echo_pin,
+      right_.topic.c_str(),
+      gpio_backend_.c_str());
+  }
+
+  rcl_interfaces::msg::SetParametersResult on_parameters_set(
+    const std::vector<rclcpp::Parameter> & params)
+  {
+    for (const auto & param : params) {
+      apply_parameter_override(param);
+    }
+
+    rate_ = std::max(1.0, rate_);
+    window_size_ = std::max(1, window_size_);
+    min_range_ = std::max(0.0, min_range_);
+    max_range_ = std::max(min_range_, max_range_);
+
+    const bool active = this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
+    if (active) {
+      reconfigure_pending_ = true;
+    } else {
+      recreate_interfaces(false);
+      log_hot_reload();
+    }
+
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
+    result.reason = "ok";
+    return result;
+  }
+
   double read_distance_m(SensorConfig & cfg)
   {
 #ifdef HAVE_LIBGPIOD
@@ -471,14 +572,15 @@ cleanup:
   void publish_range(
     const rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Range>::SharedPtr & pub,
     const std::string & frame,
-    double range)
+    double range,
+    const rclcpp::Time & stamp)
   {
     if (!pub || !pub->is_activated()) {
       return;
     }
 
     sensor_msgs::msg::Range msg;
-    msg.header.stamp = now();
+    msg.header.stamp = stamp.nanoseconds() > 0 ? stamp : now();
     msg.header.frame_id = frame;
     msg.radiation_type = sensor_msgs::msg::Range::ULTRASOUND;
     msg.field_of_view = 0.52;
@@ -498,15 +600,24 @@ cleanup:
       return;
     }
 
+    if (reconfigure_pending_) {
+      reconfigure_pending_ = false;
+      recreate_interfaces(true);
+      log_hot_reload();
+      return;
+    }
+
     if (measure_left_next_) {
       last_left_range_ = median_filtered(left_, read_distance_m(left_));
+      last_left_measure_stamp_ = now();
     } else {
       last_right_range_ = median_filtered(right_, read_distance_m(right_));
+      last_right_measure_stamp_ = now();
     }
     measure_left_next_ = !measure_left_next_;
 
-    publish_range(left_pub_, left_.frame, last_left_range_);
-    publish_range(right_pub_, right_.frame, last_right_range_);
+    publish_range(left_pub_, left_.frame, last_left_range_, last_left_measure_stamp_);
+    publish_range(right_pub_, right_.frame, last_right_range_, last_right_measure_stamp_);
 
     diagnostics_.force_update();
   }
@@ -520,6 +631,8 @@ cleanup:
 #endif
     stat.add("last_left_range", last_left_range_);
     stat.add("last_right_range", last_right_range_);
+    stat.add("last_left_age_s", last_left_measure_stamp_.nanoseconds() > 0 ? (now() - last_left_measure_stamp_).seconds() : -1.0);
+    stat.add("last_right_age_s", last_right_measure_stamp_.nanoseconds() > 0 ? (now() - last_right_measure_stamp_).seconds() : -1.0);
     stat.add("measure_left_next", measure_left_next_);
     stat.add("left_samples", static_cast<int>(left_.history.size()));
     stat.add("right_samples", static_cast<int>(right_.history.size()));
@@ -535,7 +648,7 @@ int main(int argc, char ** argv)
   auto node = std::make_shared<smart_follower_control::UltrasonicRangeNode>();
   node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
   node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE);
-  rclcpp::executors::MultiThreadedExecutor exec;
+  rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node->get_node_base_interface());
   exec.spin();
   rclcpp::shutdown();
