@@ -1,51 +1,28 @@
 #include <algorithm>
-#include <cmath>
-#include <limits>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <vector>
 
-#include <cv_bridge/cv_bridge.h>
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
-#include <lifecycle_msgs/msg/transition.hpp>
-#include <lifecycle_msgs/msg/state.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/range.hpp>
 
 #include "smart_follower_control/constants.hpp"
 #include "smart_follower_control/lifecycle_utils.hpp"
+#include "smart_follower_control/obstacle_runtime.hpp"
 
 namespace smart_follower_control
 {
-namespace
-{
-float percentile(std::vector<float> data, float q)
-{
-  if (data.empty()) {
-    return std::numeric_limits<float>::quiet_NaN();
-  }
-  q = std::max(0.0F, std::min(1.0F, q));
-  std::sort(data.begin(), data.end());
-  float idxf = q * static_cast<float>(data.size() - 1);
-  std::size_t lo = static_cast<std::size_t>(std::floor(idxf));
-  std::size_t hi = static_cast<std::size_t>(std::ceil(idxf));
-  if (lo == hi) {
-    return data[lo];
-  }
-  float t = idxf - static_cast<float>(lo);
-  return data[lo] * (1.0F - t) + data[hi] * t;
-}
-}  // namespace
 
 class ObstacleAvoidanceNode : public rclcpp_lifecycle::LifecycleNode
 {
 public:
   using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
+
   ObstacleAvoidanceNode()
   : rclcpp_lifecycle::LifecycleNode("obstacle_avoidance_node")
   {
@@ -54,7 +31,6 @@ public:
     declare_parameter("depth_topic", std::string("/camera/depth/image_raw"));
     declare_parameter("cmd_vel_input_topic", std::string("/cmd_vel"));
     declare_parameter("cmd_vel_avoid_topic", std::string("cmd_vel_avoid"));
-
     declare_parameter("rate", 20.0);
     declare_parameter("d_min", 0.12);
     declare_parameter("t_react", 0.20);
@@ -65,7 +41,6 @@ public:
     declare_parameter("depth_roi_height_ratio", 0.35);
     declare_parameter("depth_percentile", 0.05);
     declare_parameter("depth_sample_stride", 2);
-
     declare_parameter("turn_speed", 0.5);
     declare_parameter("slow_turn_speed", 0.25);
     declare_parameter("back_speed", -0.15);
@@ -79,21 +54,8 @@ private:
     std::string depth_topic{"/camera/depth/image_raw"};
     std::string cmd_vel_input_topic{"/cmd_vel"};
     std::string cmd_vel_avoid_topic{"cmd_vel_avoid"};
-
     double rate{20.0};
-    double d_min{0.12};
-    double t_react{0.20};
-    double a_brake{0.8};
-    double margin{0.08};
-    double exit_margin{0.08};
-    double depth_roi_width_ratio{0.4};
-    double depth_roi_height_ratio{0.35};
-    double depth_percentile{0.05};
-    int depth_sample_stride{2};
-
-    double turn_speed{0.5};
-    double slow_turn_speed{0.25};
-    double back_speed{-0.15};
+    ObstacleRuntimeConfig runtime;
   } p_;
 
   OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
@@ -103,20 +65,8 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr vel_sub_;
   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::Twist>::SharedPtr avoid_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
-  sensor_msgs::msg::Image::SharedPtr latest_depth_msg_;
-  std::mutex depth_mutex_;
   diagnostic_updater::Updater diagnostics_{this};
-
-  double left_dist_{std::numeric_limits<double>::infinity()};
-  double right_dist_{std::numeric_limits<double>::infinity()};
-  double depth_dist_{std::numeric_limits<double>::infinity()};
-  double current_speed_{0.0};
-
-  rclcpp::Time left_stamp_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time right_stamp_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time depth_stamp_{0, 0, RCL_ROS_TIME};
-  std::size_t depth_message_count_{0};
-  std::size_t depth_process_count_{0};
+  ObstacleRuntime runtime_;
 
   void load_parameters()
   {
@@ -125,35 +75,20 @@ private:
     p_.depth_topic = get_parameter("depth_topic").as_string();
     p_.cmd_vel_input_topic = get_parameter("cmd_vel_input_topic").as_string();
     p_.cmd_vel_avoid_topic = get_parameter("cmd_vel_avoid_topic").as_string();
-
     p_.rate = get_parameter("rate").as_double();
-    p_.d_min = get_parameter("d_min").as_double();
-    p_.t_react = get_parameter("t_react").as_double();
-    p_.a_brake = get_parameter("a_brake").as_double();
-    p_.margin = get_parameter("margin").as_double();
-    p_.exit_margin = get_parameter("exit_margin").as_double();
-    p_.depth_roi_width_ratio = get_parameter("depth_roi_width_ratio").as_double();
-    p_.depth_roi_height_ratio = get_parameter("depth_roi_height_ratio").as_double();
-    p_.depth_percentile = get_parameter("depth_percentile").as_double();
-    p_.depth_sample_stride = std::max<int>(1, static_cast<int>(get_parameter("depth_sample_stride").as_int()));
-    p_.turn_speed = get_parameter("turn_speed").as_double();
-    p_.slow_turn_speed = get_parameter("slow_turn_speed").as_double();
-    p_.back_speed = get_parameter("back_speed").as_double();
-  }
-
-  void reset_runtime_state()
-  {
-    left_dist_ = std::numeric_limits<double>::infinity();
-    right_dist_ = std::numeric_limits<double>::infinity();
-    depth_dist_ = std::numeric_limits<double>::infinity();
-    current_speed_ = 0.0;
-    left_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-    right_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-    depth_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-    depth_message_count_ = 0;
-    depth_process_count_ = 0;
-    std::lock_guard<std::mutex> lock(depth_mutex_);
-    latest_depth_msg_.reset();
+    p_.runtime.d_min = get_parameter("d_min").as_double();
+    p_.runtime.t_react = get_parameter("t_react").as_double();
+    p_.runtime.a_brake = get_parameter("a_brake").as_double();
+    p_.runtime.margin = get_parameter("margin").as_double();
+    p_.runtime.exit_margin = get_parameter("exit_margin").as_double();
+    p_.runtime.depth_roi_width_ratio = get_parameter("depth_roi_width_ratio").as_double();
+    p_.runtime.depth_roi_height_ratio = get_parameter("depth_roi_height_ratio").as_double();
+    p_.runtime.depth_percentile = get_parameter("depth_percentile").as_double();
+    p_.runtime.depth_sample_stride = std::max<int>(1, static_cast<int>(get_parameter("depth_sample_stride").as_int()));
+    p_.runtime.turn_speed = get_parameter("turn_speed").as_double();
+    p_.runtime.slow_turn_speed = get_parameter("slow_turn_speed").as_double();
+    p_.runtime.back_speed = get_parameter("back_speed").as_double();
+    runtime_.set_config(p_.runtime);
   }
 
   void recreate_interfaces(bool preserve_activation)
@@ -161,7 +96,7 @@ private:
     const bool was_active = preserve_activation && publisher_is_activated(avoid_pub_);
     if (was_active) {
       publish_zero();
-      avoid_pub_->on_deactivate();
+      deactivate_publisher(avoid_pub_);
     }
 
     timer_.reset();
@@ -170,48 +105,39 @@ private:
     depth_sub_.reset();
     vel_sub_.reset();
     avoid_pub_.reset();
-    reset_runtime_state();
+    runtime_.clear();
 
     left_sub_ = create_subscription<sensor_msgs::msg::Range>(
       p_.left_topic,
       rclcpp::SensorDataQoS(),
       [this](const sensor_msgs::msg::Range::SharedPtr msg) {
-        if (!msg) {
-          return;
+        if (msg) {
+          runtime_.on_left_range(msg->range, rclcpp::Time(msg->header.stamp));
         }
-        left_dist_ = msg->range;
-        left_stamp_ = rclcpp::Time(msg->header.stamp);
       });
-
     right_sub_ = create_subscription<sensor_msgs::msg::Range>(
       p_.right_topic,
       rclcpp::SensorDataQoS(),
       [this](const sensor_msgs::msg::Range::SharedPtr msg) {
-        if (!msg) {
-          return;
+        if (msg) {
+          runtime_.on_right_range(msg->range, rclcpp::Time(msg->header.stamp));
         }
-        right_dist_ = msg->range;
-        right_stamp_ = rclcpp::Time(msg->header.stamp);
       });
-
     depth_sub_ = create_subscription<sensor_msgs::msg::Image>(
       p_.depth_topic,
       rclcpp::SensorDataQoS(),
-      std::bind(&ObstacleAvoidanceNode::on_depth, this, std::placeholders::_1));
-
+      [this](const sensor_msgs::msg::Image::SharedPtr msg) { runtime_.on_depth(msg); });
     vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
       p_.cmd_vel_input_topic,
       10,
       [this](const geometry_msgs::msg::Twist::SharedPtr msg) {
         if (msg) {
-          current_speed_ = std::abs(msg->linear.x);
+          runtime_.on_cmd_vel(*msg);
         }
       });
 
     avoid_pub_ = create_publisher<geometry_msgs::msg::Twist>(p_.cmd_vel_avoid_topic, 10);
-    timer_ = create_wall_timer(
-      hz_to_period(p_.rate),
-      std::bind(&ObstacleAvoidanceNode::on_timer, this));
+    timer_ = create_wall_timer(hz_to_period(p_.rate), std::bind(&ObstacleAvoidanceNode::on_timer, this));
 
     if (was_active) {
       activate_publisher(avoid_pub_);
@@ -227,7 +153,6 @@ private:
     diagnostics_.add("avoidance_status", this, &ObstacleAvoidanceNode::diag_callback);
     param_callback_handle_ = this->add_on_set_parameters_callback(
       std::bind(&ObstacleAvoidanceNode::on_parameters_set, this, std::placeholders::_1));
-
     return CallbackReturn::SUCCESS;
   }
 
@@ -253,7 +178,7 @@ private:
     vel_sub_.reset();
     avoid_pub_.reset();
     param_callback_handle_.reset();
-    reset_runtime_state();
+    runtime_.clear();
     return CallbackReturn::SUCCESS;
   }
 
@@ -266,22 +191,21 @@ private:
     else if (name == "cmd_vel_input_topic") target.cmd_vel_input_topic = param.as_string();
     else if (name == "cmd_vel_avoid_topic") target.cmd_vel_avoid_topic = param.as_string();
     else if (name == "rate") target.rate = param.as_double();
-    else if (name == "d_min") target.d_min = param.as_double();
-    else if (name == "t_react") target.t_react = param.as_double();
-    else if (name == "a_brake") target.a_brake = param.as_double();
-    else if (name == "margin") target.margin = param.as_double();
-    else if (name == "exit_margin") target.exit_margin = param.as_double();
-    else if (name == "depth_roi_width_ratio") target.depth_roi_width_ratio = param.as_double();
-    else if (name == "depth_roi_height_ratio") target.depth_roi_height_ratio = param.as_double();
-    else if (name == "depth_percentile") target.depth_percentile = param.as_double();
-    else if (name == "depth_sample_stride") target.depth_sample_stride = static_cast<int>(param.as_int());
-    else if (name == "turn_speed") target.turn_speed = param.as_double();
-    else if (name == "slow_turn_speed") target.slow_turn_speed = param.as_double();
-    else if (name == "back_speed") target.back_speed = param.as_double();
+    else if (name == "d_min") target.runtime.d_min = param.as_double();
+    else if (name == "t_react") target.runtime.t_react = param.as_double();
+    else if (name == "a_brake") target.runtime.a_brake = param.as_double();
+    else if (name == "margin") target.runtime.margin = param.as_double();
+    else if (name == "exit_margin") target.runtime.exit_margin = param.as_double();
+    else if (name == "depth_roi_width_ratio") target.runtime.depth_roi_width_ratio = param.as_double();
+    else if (name == "depth_roi_height_ratio") target.runtime.depth_roi_height_ratio = param.as_double();
+    else if (name == "depth_percentile") target.runtime.depth_percentile = param.as_double();
+    else if (name == "depth_sample_stride") target.runtime.depth_sample_stride = static_cast<int>(param.as_int());
+    else if (name == "turn_speed") target.runtime.turn_speed = param.as_double();
+    else if (name == "slow_turn_speed") target.runtime.slow_turn_speed = param.as_double();
+    else if (name == "back_speed") target.runtime.back_speed = param.as_double();
   }
 
-  rcl_interfaces::msg::SetParametersResult on_parameters_set(
-    const std::vector<rclcpp::Parameter> & params)
+  rcl_interfaces::msg::SetParametersResult on_parameters_set(const std::vector<rclcpp::Parameter> & params)
   {
     Params candidate = p_;
     for (const auto & param : params) {
@@ -289,13 +213,14 @@ private:
     }
 
     candidate.rate = std::max(1.0, candidate.rate);
-    candidate.a_brake = std::max(1e-3, candidate.a_brake);
-    candidate.depth_roi_width_ratio = std::clamp(candidate.depth_roi_width_ratio, 0.05, 1.0);
-    candidate.depth_roi_height_ratio = std::clamp(candidate.depth_roi_height_ratio, 0.05, 1.0);
-    candidate.depth_percentile = std::clamp(candidate.depth_percentile, 0.0, 1.0);
-    candidate.depth_sample_stride = std::max(1, candidate.depth_sample_stride);
+    candidate.runtime.a_brake = std::max(1e-3, candidate.runtime.a_brake);
+    candidate.runtime.depth_roi_width_ratio = std::clamp(candidate.runtime.depth_roi_width_ratio, 0.05, 1.0);
+    candidate.runtime.depth_roi_height_ratio = std::clamp(candidate.runtime.depth_roi_height_ratio, 0.05, 1.0);
+    candidate.runtime.depth_percentile = std::clamp(candidate.runtime.depth_percentile, 0.0, 1.0);
+    candidate.runtime.depth_sample_stride = std::max(1, candidate.runtime.depth_sample_stride);
 
     p_ = candidate;
+    runtime_.set_config(p_.runtime);
     recreate_interfaces(is_primary_active(*this));
 
     RCLCPP_INFO(
@@ -307,7 +232,7 @@ private:
       p_.depth_topic.c_str(),
       p_.cmd_vel_avoid_topic.c_str(),
       p_.rate,
-      p_.depth_sample_stride);
+      p_.runtime.depth_sample_stride);
 
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = true;
@@ -315,151 +240,32 @@ private:
     return result;
   }
 
-  void on_depth(const sensor_msgs::msg::Image::SharedPtr msg)
-  {
-    if (!msg) {
-      return;
-    }
-
-    std::lock_guard<std::mutex> lock(depth_mutex_);
-    latest_depth_msg_ = msg;
-    depth_message_count_ += 1;
-  }
-
-  void refresh_depth_from_latest()
-  {
-    sensor_msgs::msg::Image::SharedPtr msg;
-    {
-      std::lock_guard<std::mutex> lock(depth_mutex_);
-      msg = latest_depth_msg_;
-    }
-    if (!msg) {
-      return;
-    }
-
-    const rclcpp::Time msg_stamp(msg->header.stamp);
-    if (msg_stamp.nanoseconds() == 0 || msg_stamp.nanoseconds() == depth_stamp_.nanoseconds()) {
-      return;
-    }
-
-    cv::Mat depth;
-    try {
-      if (msg->encoding == "16UC1" || msg->encoding == "32FC1") {
-        depth = cv_bridge::toCvShare(msg, msg->encoding)->image;
-      } else {
-        depth = cv_bridge::toCvShare(msg)->image;
-      }
-    } catch (const cv_bridge::Exception &) {
-      return;
-    }
-
-    const int w = depth.cols;
-    const int h = depth.rows;
-    if (w <= 0 || h <= 0) {
-      return;
-    }
-
-    const int roi_w = static_cast<int>(w * p_.depth_roi_width_ratio);
-    const int roi_h = static_cast<int>(h * p_.depth_roi_height_ratio);
-    const int x0 = std::max(0, (w - roi_w) / 2);
-    const int y0 = std::max(0, (h - roi_h) / 2);
-    const int x1 = std::min(w - 1, x0 + roi_w);
-    const int y1 = std::min(h - 1, y0 + roi_h);
-    const int stride = std::max(1, p_.depth_sample_stride);
-
-    std::vector<float> valid;
-    valid.reserve(static_cast<std::size_t>(((roi_w + stride - 1) / stride) * ((roi_h + stride - 1) / stride)));
-    for (int y = y0; y <= y1; y += stride) {
-      for (int x = x0; x <= x1; x += stride) {
-        float m = 0.0F;
-        if (depth.type() == CV_16UC1) {
-          uint16_t mm = depth.at<uint16_t>(y, x);
-          if (mm == 0) {
-            continue;
-          }
-          m = static_cast<float>(mm) * 0.001F;
-        } else if (depth.type() == CV_32FC1) {
-          m = depth.at<float>(y, x);
-        } else {
-          continue;
-        }
-
-        if (std::isfinite(m) && m > 0.05F && m < 8.0F) {
-          valid.push_back(m);
-        }
-      }
-    }
-
-    if (!valid.empty()) {
-      depth_dist_ = percentile(valid, static_cast<float>(p_.depth_percentile));
-      depth_stamp_ = msg_stamp;
-      depth_process_count_ += 1;
-    }
-  }
-
   void on_timer()
   {
-    if (this->get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+    if (!is_primary_active(*this)) {
       return;
     }
 
-    refresh_depth_from_latest();
-
-    const auto t = now();
-    const auto stale = [&](const rclcpp::Time & stamp) {
-      return stamp.nanoseconds() == 0 || (t - stamp).seconds() > 0.5;
-    };
-
-    double left = stale(left_stamp_) ? std::numeric_limits<double>::infinity() : left_dist_;
-    double right = stale(right_stamp_) ? std::numeric_limits<double>::infinity() : right_dist_;
-    double depth = stale(depth_stamp_) ? std::numeric_limits<double>::infinity() : depth_dist_;
-
-    const double d_safe = p_.d_min + current_speed_ * p_.t_react +
-                          (current_speed_ * current_speed_) / (2.0 * std::max(1e-3, p_.a_brake)) +
-                          p_.margin;
-    const double d_enter = d_safe;
-    const double d_exit = d_safe + p_.exit_margin;
-    const double d_danger = std::max(0.18, 0.6 * d_safe);
-
-    const double fused_min = std::min({left, right, depth});
-
-    geometry_msgs::msg::Twist out;
-
-    if (fused_min > d_exit) {
-      out = geometry_msgs::msg::Twist();
-    } else if (left < d_danger && right < d_danger) {
-      out.linear.x = p_.back_speed;
-      out.angular.z = 0.0;
-    } else if (left < d_danger && right > d_enter) {
-      out.linear.x = 0.0;
-      out.angular.z = -std::abs(p_.turn_speed);
-    } else if (right < d_danger && left > d_enter) {
-      out.linear.x = 0.0;
-      out.angular.z = std::abs(p_.turn_speed);
-    } else if (fused_min < d_enter) {
-      out.linear.x = 0.0;
-      out.angular.z = (left < right) ? -std::abs(p_.slow_turn_speed) : std::abs(p_.slow_turn_speed);
-    }
-
-    publish_if_activated(avoid_pub_, out);
-
+    publish_if_activated(avoid_pub_, runtime_.compute_command(now()));
     diagnostics_.force_update();
   }
 
   void publish_zero()
   {
+    runtime_.clear();
     publish_if_activated(avoid_pub_, geometry_msgs::msg::Twist());
   }
 
   void diag_callback(diagnostic_updater::DiagnosticStatusWrapper & stat)
   {
-    stat.add("left_dist", left_dist_);
-    stat.add("right_dist", right_dist_);
-    stat.add("depth_dist", depth_dist_);
-    stat.add("depth_message_count", static_cast<int>(depth_message_count_));
-    stat.add("depth_process_count", static_cast<int>(depth_process_count_));
-    stat.add("depth_sample_stride", p_.depth_sample_stride);
-    stat.add("current_speed", current_speed_);
+    const auto snapshot = runtime_.snapshot();
+    stat.add("left_dist", snapshot.left_dist);
+    stat.add("right_dist", snapshot.right_dist);
+    stat.add("depth_dist", snapshot.depth_dist);
+    stat.add("depth_message_count", snapshot.depth_message_count);
+    stat.add("depth_process_count", snapshot.depth_process_count);
+    stat.add("depth_sample_stride", snapshot.depth_sample_stride);
+    stat.add("current_speed", snapshot.current_speed);
     stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Obstacle avoidance active");
   }
 };

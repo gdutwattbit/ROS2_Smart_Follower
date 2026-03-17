@@ -6,15 +6,20 @@
 
 ### Added
 - 控制侧新增公共头文件：`smart_follower_control/constants.hpp`、`smart_follower_control/lifecycle_utils.hpp`。
-- 新增控制侧拆分模块：`arbiter_runtime.hpp/cpp`、`ultrasonic_runtime.hpp/cpp`。
-- 新增 `test_arbiter_runtime.cpp`，用于覆盖仲裁运行态行为。
+- 新增控制侧拆分模块：`arbiter_runtime.hpp/cpp`、`ultrasonic_runtime.hpp/cpp`、`follower_runtime.hpp/cpp`、`obstacle_runtime.hpp/cpp`。
+- 新增 `test_arbiter_runtime.cpp`、`test_follower_runtime.cpp`、`test_obstacle_runtime.cpp`，用于覆盖仲裁、跟随控制与避障运行态行为。
 - 为 `TrackedPerson.msg` 和 `PersonPoseArray.msg` 补充 2D bbox / 3D pose 的语义注释。
 
 ### Changed
 - 控制侧四个 Lifecycle 节点开始复用最小公共骨架：版本常量、激活判断、频率转周期工具、统一的 `main` 启动样板。
-- `arbiter_node.cpp` 与 `ultrasonic_range_node.cpp` 进一步瘦身，节点类只保留参数/接口/diagnostics glue code。
+- `arbiter_node.cpp`、`ultrasonic_range_node.cpp`、`follower_controller_node.cpp` 与 `obstacle_avoidance_node.cpp` 进一步瘦身，节点类只保留参数/接口/diagnostics glue code。
+- `smart_follower_control_core` 扩展为统一承载仲裁、超声、跟随控制、避障四类 runtime 实现，便于测试和后续继续拆分。
 - 感知侧与控制侧运行时版本字符串统一提升到 `alpha-0.1.1`。
 - README 补充 `/person_pose` 消息语义说明，明确 `header.frame_id` 只约束 3D 字段。
+
+### Verified
+- 在虚拟机 `wheeltec@192.168.220.131` 上完成 `colcon build --packages-select smart_follower_control --symlink-install`。
+- 在同一环境完成 `colcon test --packages-select smart_follower_control`，当前控制侧累计 21 项测试通过。
 
 ### Notes
 - 这是可读性与维护性优化，不改外部话题、节点名、参数名与主行为。

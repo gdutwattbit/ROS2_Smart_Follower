@@ -24,6 +24,8 @@
 - 控制侧新增最小公共 helper：`constants.hpp` + `lifecycle_utils.hpp`
 - P1 继续拆分控制侧：新增 `arbiter_runtime.hpp/cpp` 与 `ultrasonic_runtime.hpp/cpp`，把状态机运行态和超声硬件/滤波逻辑从节点类中抽离
 - 控制侧 Lifecycle main 样板、激活判断、频率转周期工具开始复用，降低后续继续拆分时的重复劳动
+- P2 继续拆分控制侧：新增 `follower_runtime.hpp/cpp` 与 `obstacle_runtime.hpp/cpp`，将跟随控制计算、深度 ROI 采样与动态避障决策从节点类中剥离
+- 为 P2 补充 `test_follower_runtime.cpp`、`test_obstacle_runtime.cpp`，并在虚拟机完成 `smart_follower_control` build/test 回归
 - 统一感知侧与控制侧运行时版本字符串到 `alpha-0.1.1`
 - 为 `TrackedPerson.msg` / `PersonPoseArray.msg` 补充 2D bbox 与 3D pose 的语义注释
 - README 补充消息语义说明，避免 `header.frame_id` 与像素 bbox 混淆

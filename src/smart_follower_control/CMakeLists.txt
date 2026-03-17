@@ -53,6 +53,8 @@ set(common_deps
 
 add_library(smart_follower_control_core
   src/arbiter_runtime.cpp
+  src/follower_runtime.cpp
+  src/obstacle_runtime.cpp
   src/ultrasonic_runtime.cpp
 )
 ament_target_dependencies(smart_follower_control_core
@@ -60,17 +62,20 @@ ament_target_dependencies(smart_follower_control_core
   geometry_msgs
   sensor_msgs
   smart_follower_msgs
+  cv_bridge
 )
-target_include_directories(smart_follower_control_core PUBLIC include)
+target_include_directories(smart_follower_control_core PUBLIC include ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(smart_follower_control_core ${OpenCV_LIBS})
 
 add_executable(follower_controller_node src/follower_controller_node.cpp)
 ament_target_dependencies(follower_controller_node ${common_deps})
 target_include_directories(follower_controller_node PRIVATE include)
+target_link_libraries(follower_controller_node smart_follower_control_core)
 
 add_executable(obstacle_avoidance_node src/obstacle_avoidance_node.cpp)
 ament_target_dependencies(obstacle_avoidance_node ${common_deps})
-target_include_directories(obstacle_avoidance_node PRIVATE include ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(obstacle_avoidance_node ${OpenCV_LIBS})
+target_include_directories(obstacle_avoidance_node PRIVATE include)
+target_link_libraries(obstacle_avoidance_node smart_follower_control_core)
 
 add_executable(arbiter_node src/arbiter_node.cpp)
 ament_target_dependencies(arbiter_node ${common_deps})
@@ -88,7 +93,7 @@ target_link_libraries(ultrasonic_range_node smart_follower_control_core)
 if(LIBGPIOD_INCLUDE_DIR AND LIBGPIOD_LIBRARY)
   target_compile_definitions(smart_follower_control_core PRIVATE HAVE_LIBGPIOD=1)
   target_include_directories(smart_follower_control_core PRIVATE ${LIBGPIOD_INCLUDE_DIR})
-  target_link_libraries(smart_follower_control_core PUBLIC ${LIBGPIOD_LIBRARY})
+  target_link_libraries(smart_follower_control_core ${LIBGPIOD_LIBRARY})
   get_filename_component(LIBGPIOD_LIBRARY_DIR ${LIBGPIOD_LIBRARY} DIRECTORY)
   set_target_properties(ultrasonic_range_node PROPERTIES
     BUILD_RPATH ${LIBGPIOD_LIBRARY_DIR}
@@ -118,6 +123,7 @@ install(DIRECTORY config/
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+
   ament_add_gtest(test_arbiter_sm test/test_arbiter_sm.cpp)
   if(TARGET test_arbiter_sm)
     target_include_directories(test_arbiter_sm PRIVATE include)
@@ -129,9 +135,20 @@ if(BUILD_TESTING)
     ament_target_dependencies(test_arbiter_runtime rclcpp geometry_msgs smart_follower_msgs)
     target_link_libraries(test_arbiter_runtime smart_follower_control_core)
   endif()
+
+  ament_add_gtest(test_follower_runtime test/test_follower_runtime.cpp)
+  if(TARGET test_follower_runtime)
+    target_include_directories(test_follower_runtime PRIVATE include)
+    ament_target_dependencies(test_follower_runtime rclcpp geometry_msgs smart_follower_msgs)
+    target_link_libraries(test_follower_runtime smart_follower_control_core)
+  endif()
+
+  ament_add_gtest(test_obstacle_runtime test/test_obstacle_runtime.cpp)
+  if(TARGET test_obstacle_runtime)
+    target_include_directories(test_obstacle_runtime PRIVATE include)
+    ament_target_dependencies(test_obstacle_runtime rclcpp geometry_msgs sensor_msgs cv_bridge)
+    target_link_libraries(test_obstacle_runtime smart_follower_control_core)
+  endif()
 endif()
 
 ament_package()
-
-
-
