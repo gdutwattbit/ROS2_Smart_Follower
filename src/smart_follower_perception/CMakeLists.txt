@@ -49,6 +49,49 @@ find_library(ONNXRUNTIME_LIBRARY
   PATH_SUFFIXES lib lib64
 )
 
+add_library(smart_follower_perception_core
+  src/runtime.cpp
+  src/frame_sync.cpp
+  src/tracker.cpp
+  src/lock_manager.cpp
+  src/geometry_utils.cpp
+)
+
+target_include_directories(smart_follower_perception_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(smart_follower_perception_core
+  ${OpenCV_LIBS}
+)
+
+ament_target_dependencies(smart_follower_perception_core
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  std_msgs
+  image_geometry
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  smart_follower_msgs
+)
+
+if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+  target_compile_definitions(smart_follower_perception_core PUBLIC HAVE_ONNXRUNTIME=1)
+  target_include_directories(smart_follower_perception_core PUBLIC ${ONNXRUNTIME_INCLUDE_DIR})
+  target_link_libraries(smart_follower_perception_core ${ONNXRUNTIME_LIBRARY})
+  get_filename_component(ONNXRUNTIME_LIBRARY_DIR ${ONNXRUNTIME_LIBRARY} DIRECTORY)
+  set_target_properties(smart_follower_perception_core PROPERTIES
+    BUILD_RPATH ${ONNXRUNTIME_LIBRARY_DIR}
+    INSTALL_RPATH ${ONNXRUNTIME_LIBRARY_DIR}
+  )
+else()
+  message(WARNING "ONNX Runtime not found. perception_node will build with stub inference.")
+endif()
+
 add_executable(perception_node
   src/perception_node.cpp
 )
@@ -58,20 +101,11 @@ target_include_directories(perception_node PRIVATE
   ${OpenCV_INCLUDE_DIRS}
 )
 
-if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
-  target_compile_definitions(perception_node PRIVATE HAVE_ONNXRUNTIME=1)
-  target_include_directories(perception_node PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
-  target_link_libraries(perception_node ${ONNXRUNTIME_LIBRARY})
-  get_filename_component(ONNXRUNTIME_LIBRARY_DIR ${ONNXRUNTIME_LIBRARY} DIRECTORY)
-  set_target_properties(perception_node PROPERTIES
-    BUILD_RPATH ${ONNXRUNTIME_LIBRARY_DIR}
-    INSTALL_RPATH ${ONNXRUNTIME_LIBRARY_DIR}
-  )
-else()
-  message(WARNING "ONNX Runtime not found. perception_node will build with stub inference.")
-endif()
-
-target_link_libraries(perception_node ${OpenCV_LIBS} Eigen3::Eigen)
+target_link_libraries(perception_node
+  smart_follower_perception_core
+  ${OpenCV_LIBS}
+  Eigen3::Eigen
+)
 
 ament_target_dependencies(perception_node
   rclcpp
@@ -91,8 +125,10 @@ ament_target_dependencies(perception_node
   smart_follower_msgs
 )
 
-install(TARGETS perception_node
-  DESTINATION lib/${PROJECT_NAME}
+install(TARGETS perception_node smart_follower_perception_core
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
 install(DIRECTORY include/
@@ -105,13 +141,33 @@ install(DIRECTORY scripts/
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+
   ament_add_gtest(test_assignment test/test_assignment.cpp)
   if(TARGET test_assignment)
     target_include_directories(test_assignment PRIVATE include)
     target_link_libraries(test_assignment Eigen3::Eigen)
   endif()
+
+  ament_add_gtest(test_frame_sync test/test_frame_sync.cpp)
+  if(TARGET test_frame_sync)
+    target_include_directories(test_frame_sync PRIVATE include)
+    ament_target_dependencies(test_frame_sync rclcpp sensor_msgs)
+    target_link_libraries(test_frame_sync smart_follower_perception_core)
+  endif()
+
+  ament_add_gtest(test_lock_manager test/test_lock_manager.cpp)
+  if(TARGET test_lock_manager)
+    target_include_directories(test_lock_manager PRIVATE include)
+    ament_target_dependencies(test_lock_manager rclcpp smart_follower_msgs)
+    target_link_libraries(test_lock_manager smart_follower_perception_core)
+  endif()
+
+  ament_add_gtest(test_tracker test/test_tracker.cpp)
+  if(TARGET test_tracker)
+    target_include_directories(test_tracker PRIVATE include)
+    ament_target_dependencies(test_tracker rclcpp smart_follower_msgs)
+    target_link_libraries(test_tracker smart_follower_perception_core)
+  endif()
 endif()
 
 ament_package()
-
-
