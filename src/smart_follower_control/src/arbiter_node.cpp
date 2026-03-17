@@ -244,7 +244,7 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "[alpha-0.0.2] arbiter parameters hot-reloaded: pose=%s follow=%s avoid=%s cmd=%s rate=%.2f",
+      "[alpha-0.0.4] arbiter parameters hot-reloaded: pose=%s follow=%s avoid=%s cmd=%s rate=%.2f",
       p_.person_pose_topic.c_str(),
       p_.cmd_vel_follow_topic.c_str(),
       p_.cmd_vel_avoid_topic.c_str(),

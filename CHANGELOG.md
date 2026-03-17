@@ -1,13 +1,38 @@
 # CHANGELOG
 
+## alpha-0.0.4 - 2026-03-17
+
+### Added
+- 新增 `pyproject.toml`，用 `uv` 管理模型训练/导出/校验 Python 工具链。
+- `reid/train` 依赖组补齐 `scipy`、`opencv-python-headless`、`gdown`、`tensorboard`，保证 `torchreid` 训练脚本可直接启动。
+- README 增补方案 B：目标机优先使用 `validate` / `train`，完整 `export` 放本地开发机执行。
+
+### Changed
+- `uv` 中的 `torch` / `torchvision` 固定到官方 PyTorch CPU-only index，避免虚拟机或主控误装 CUDA / NVIDIA 轮子。
+- `scripts/install_dependencies.sh` 默认按方案 B 安装 Python 工具链：`--with-training` 仅安装 `train` 组，不再默认拉完整 `export`。
+- 运行时日志版本字符串统一提升到 `alpha-0.0.4`。
+
+### Verified
+- 虚拟机 `wheeltec@192.168.220.131` 已完成 CPU-only `train` 组安装，验证结果为 `torch 2.10.0+cpu`、`torchvision 0.25.0+cpu`。
+- 清理旧 GPU-heavy `.venv` 和 uv 缓存后，虚拟机空间从 `.venv 7.4G / cache 2.4G` 收敛到 `.venv 1.4G / cache 56M`。
+- `uv run --group train python src/smart_follower_perception/scripts/train_reid_resnet50.py --help` 与 `uv run --group validate ...` 均已验证可用。
+
 ## alpha-0.0.3 - 2026-03-17
 
 ### Added
+- `uv` 的 `reid/train` 依赖补齐 `tensorboard`，修复 `torchreid` 引擎初始化阶段缺少 `SummaryWriter` 后端的问题。
+- `uv` 的 `reid/train` 依赖补齐 `gdown`，修复 `torchreid` 数据集模块导入时缺少 `gdown` 的问题。
+- `uv` 的 `reid/train` 依赖补齐 `opencv-python-headless`，修复 `torchreid` 导入时缺少 `cv2` 的问题。
+- `uv` 的 `reid/train` 依赖补齐 `scipy`，修复 `torchreid` 导入时因缺少 `scipy.io` 导致脚本连 `--help` 都无法运行的问题。
 - 控制链四个核心节点补齐运行时参数热更新：`follower_controller_node`、`arbiter_node`、`obstacle_avoidance_node`、`ultrasonic_range_node`。
 - README 补充本轮稳定性说明、虚拟机自检结果和运行时调参注意事项。
 - 新增项目级 `CHANGELOG.md`，统一记录版本演进。
 
 ### Changed
+- `uv` 中的 `torch` / `torchvision` 固定到官方 PyTorch CPU-only index，避免虚拟机或主控误装 CUDA / NVIDIA 轮子。
+- 补充说明 `uv train/export` 组在 Linux 下可能拉取较大的 PyTorch 轮子，文档中已明确推荐目标机优先使用 `validate` / `train`，完整 `export` 放本地机执行。
+- 运行时日志版本字符串统一修正到 `alpha-0.0.3`。
+- `uv` 工具链按“方案 B”落地：目标机默认只保留 `validate` / `train`，完整 `export` 改为推荐在本地开发机执行。
 - 超声波节点参数热更新改为“参数回调登记 + 下一次 timer tick 重建资源”，避免 active 状态下直接重建 GPIO 资源导致的服务阻塞。
 - 本轮发布版本提升为 `alpha-0.0.3`，保留 `alpha-0.0.2` 作为上一可用快照。
 

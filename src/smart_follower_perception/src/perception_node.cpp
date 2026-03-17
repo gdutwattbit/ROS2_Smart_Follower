@@ -53,7 +53,7 @@ namespace fs = std::filesystem;
 constexpr int kStateDim = 10;
 constexpr int kMeasureDim = 4;
 constexpr int kFeatureDim = 2048;
-constexpr char kRuntimeVersion[] = "alpha-0.0.2";
+constexpr char kRuntimeVersion[] = "alpha-0.0.4";
 
 std::string resolve_model_path(const std::string & input_path)
 {

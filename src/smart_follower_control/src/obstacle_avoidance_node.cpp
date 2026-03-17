@@ -300,7 +300,7 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "[alpha-0.0.2] avoidance parameters hot-reloaded: left=%s right=%s depth=%s cmd=%s rate=%.2f stride=%d",
+      "[alpha-0.0.4] avoidance parameters hot-reloaded: left=%s right=%s depth=%s cmd=%s rate=%.2f stride=%d",
       p_.left_topic.c_str(),
       p_.right_topic.c_str(),
       p_.depth_topic.c_str(),

@@ -1,0 +1,50 @@
+[project]
+name = "ros2-smart-follower-tools"
+version = "0.0.0"
+description = "Python tooling for ROS2 Smart Follower model export, training, and validation"
+requires-python = ">=3.10,<3.14"
+dependencies = []
+
+[dependency-groups]
+base = [
+  "numpy>=2.2,<3",
+  "onnx>=1.20,<2",
+  "onnxruntime>=1.23,<1.24",
+]
+yolo = [
+  "ultralytics>=8.3,<9",
+]
+reid = [
+  "torch>=2.5,<3",
+  "torchvision>=0.20,<1",
+  "torchreid>=0.2.5,<0.3",
+  "scipy>=1.10,<2",
+  "opencv-python-headless>=4.10,<5",
+  "gdown>=5,<6",
+  "tensorboard>=2.16,<3",
+]
+export = [
+  { include-group = "base" },
+  { include-group = "yolo" },
+  { include-group = "reid" },
+]
+train = [
+  { include-group = "base" },
+  { include-group = "reid" },
+]
+validate = [
+  { include-group = "base" },
+]
+
+[tool.uv]
+default-groups = []
+package = false
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]

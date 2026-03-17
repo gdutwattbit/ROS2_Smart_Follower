@@ -96,6 +96,10 @@
 - `torch`
 - `torchvision`
 - `torchreid`
+- `scipy`
+- `opencv-python-headless`
+- `gdown`
+- `tensorboard`
 - `ultralytics`
 
 > 这部分不是运行 ROS 节点的硬性依赖，而是模型训练、导出、验证工具链依赖。
@@ -142,3 +146,75 @@
 - `--without-onnxruntime`：跳过 ONNX Runtime 安装尝试
 - `--install-ros`：若本机 apt 源已配置 ROS 仓库，则尝试安装 `ros-humble-desktop`
 
+
+
+## 7. Python 工具链的 uv 管理
+
+为避免模型训练 / 导出 / 校验脚本的 Python 环境在本地机、虚拟机、主控间漂移，仓库根目录已增加：
+
+- `pyproject.toml`
+
+当前约定：
+
+- `colcon + CMake`：管理 ROS2 / C++ 主工程
+- `uv`：只管理 Python 工具链，不接管 ROS2 运行时
+
+### 7.1 dependency groups
+
+- `base`
+  - `numpy`
+  - `onnx`
+  - `onnxruntime`
+- `yolo`
+  - `ultralytics`
+- `reid`
+  - `torch`
+  - `torchvision`
+  - `torchreid`
+- `scipy`
+- `opencv-python-headless`
+- `gdown`
+- `tensorboard`
+- `export`
+  - 包含 `base + yolo + reid`
+- `train`
+  - 包含 `base + reid`
+- `validate`
+  - 包含 `base`
+
+### 7.2 常用命令
+
+```bash
+# 初始化空环境（默认不拉重型组）
+uv sync
+
+# 安装最小 ONNX 校验环境
+uv sync --group validate
+
+# 安装 ReID 训练环境
+uv sync --group train
+
+# 安装完整导出环境
+uv sync --group export
+
+# 直接运行脚本
+uv run --group export python src/smart_follower_perception/scripts/export_yolo_onnx.py --help
+uv run --group train python src/smart_follower_perception/scripts/train_reid_resnet50.py --help
+uv run --group validate python src/smart_follower_perception/scripts/validate_reid_onnx.py --help
+```
+
+### 7.3 当前边界
+
+- 暂不把 `uv` 嵌进 `colcon build`。
+- 暂不为 ROS2 Python 节点单独打 wheel / 包发布。
+- 现阶段只服务于模型工具链，先保证简单、稳定、可复现。
+
+
+补充说明：ROS2 Humble 默认 Python 3.10，当前 `onnxruntime` 建议约束为 `<1.24`，否则 `uv` 可能解析到仅支持 cp311+ 的新版本。
+
+
+当前建议按“方案 B”使用：虚拟机 / 主控以 `validate`、`train` 为主；完整 `export` 建议放在本地开发机执行。
+
+补充说明：`train` 组若直接走默认 PyPI 源，Linux 上可能会拉取较大的 PyTorch 相关轮子，体积可达数 GB。
+
+补充说明：`uv` 中的 `torch`、`torchvision` 已固定到官方 PyTorch CPU-only index（https://download.pytorch.org/whl/cpu），避免目标机误装 CUDA 相关轮子。

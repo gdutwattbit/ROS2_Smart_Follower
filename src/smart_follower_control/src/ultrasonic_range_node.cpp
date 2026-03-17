@@ -470,7 +470,7 @@ cleanup:
   {
     RCLCPP_INFO(
       get_logger(),
-      "[alpha-0.0.2] ultrasonic parameters hot-reloaded: rate=%.2f left=(%d,%d,%s) right=(%d,%d,%s) backend=%s",
+      "[alpha-0.0.4] ultrasonic parameters hot-reloaded: rate=%.2f left=(%d,%d,%s) right=(%d,%d,%s) backend=%s",
       rate_,
       left_.trig_pin,
       left_.echo_pin,

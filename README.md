@@ -17,7 +17,7 @@
 
 ## 1. 当前版本
 
-- **当前可用版本：`alpha-0.0.3`**
+- **当前可用版本：`alpha-0.0.4`**
 - **上一调试快照：`dev-0.0.1.1`**
 - 状态：Usable Alpha（主链路可启动，适合作为首个实机可用版本）
 - 注意：实机使用 Astra 深度相机时，外部 `turn_on_wheeltec_robot/wheeltec_camera.launch.py` 需显式传入 `depth_registration=true`，确保 `/camera/depth/image_raw` 对齐到彩色光学坐标系。
@@ -52,7 +52,7 @@
 
 ---
 
-### 1.3 alpha-0.0.3 稳定性补丁（2026-03-17）
+### 1.3 alpha-0.0.4 稳定性补丁（2026-03-17）
 
 本轮收尾主要补的是**运行稳定性**和**在线调参能力**，没有改动主链路架构：
 
@@ -360,3 +360,106 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 
 - 项目维护：`gdutwattbit`
 - 版本起点：`alpha-0.0.1.1`
+
+
+## 15. Python 工具链包管理（uv）
+
+`uv` 只用于**模型训练 / 导出 / 校验脚本**的 Python 环境管理，不替代 `rosdep`、`colcon` 或 ROS2 运行时。
+
+### 15.1 推荐使用边界
+
+按当前工程实践，建议这样用：
+
+- `train` 组中的 `torch / torchvision` 现在固定走 **PyTorch CPU-only index**，避免在 Linux 上误拉取 CUDA / NVIDIA 巨型依赖。
+
+- **虚拟机 / 主控**：只保留 `validate`，必要时保留 `train`
+- **本地开发机**：执行完整 `export`
+
+原因很直接：
+
+- `export` 组包含 `torch / torchvision / torchreid / ultralytics`
+- 依赖解析和轮子下载都比较重
+- 在虚拟机上一次性跑完整 `export` 容易耗时很长，且中断后可能留下残留 `uv sync` 进程占住 `.venv/.lock`
+
+因此：
+
+- 日常联调、校验 ONNX：`validate`
+- ReID 训练链路：`train`
+- YOLO / ReID 完整导出：**建议本地机执行 `export`**
+
+补充注意：
+
+- `train` 组在 Linux 上可能会拉取较大的 `torch / torchvision` 轮子；若使用默认 PyPI 源，存在一次下载数 GB 级依赖的情况。
+
+当前已在仓库根目录增加：
+
+- `pyproject.toml`
+
+dependency groups 约定如下：
+
+- `base`：`numpy`、`onnx`、`onnxruntime`
+- `yolo`：`ultralytics`
+- `reid`：`torch`、`torchvision`、`torchreid`、`scipy`、`opencv-python-headless`、`gdown`、`tensorboard`
+- `export`：`base + yolo + reid`
+- `train`：`base + reid`
+- `validate`：`base`
+
+常用命令：
+
+```bash
+uv sync
+uv sync --group validate
+uv sync --group train
+uv sync --group export
+
+uv run --group export python src/smart_follower_perception/scripts/export_yolo_onnx.py --help
+uv run --group train python src/smart_follower_perception/scripts/train_reid_resnet50.py --help
+uv run --group validate python src/smart_follower_perception/scripts/validate_reid_onnx.py --help
+```
+
+工程边界：
+
+- `uv` 只管 Python 工具链，不接管 C++ / ROS2 主工程。
+- 现阶段不把 `uv` 嵌进 `colcon build`。
+- 目标是先统一本地机、虚拟机、主控的模型工具链依赖，减少 Python 包漂移。
+- ROS2 Humble / Python 3.10 环境下，`onnxruntime` 当前约束为 `<1.24`，避免 `uv` 解析到仅支持 cp311+ 的新版本。
+
+
+### 15.2 export 组教程（建议本地机执行）
+
+如果你要完整跑导出链路，建议在**本地开发机**执行：
+
+```bash
+cd /path/to/ros2_smart_follower
+uv sync --group export
+```
+
+准备好模型或训练权重后：
+
+```bash
+# 导出 YOLO ONNX
+uv run --group export python src/smart_follower_perception/scripts/export_yolo_onnx.py --help
+
+# 训练 ReID（ResNet50-2048）
+uv run --group train python src/smart_follower_perception/scripts/train_reid_resnet50.py --help
+
+# 导出 ReID ONNX
+uv run --group export python src/smart_follower_perception/scripts/export_reid_onnx.py --help
+
+# 校验 ReID ONNX
+uv run --group validate python src/smart_follower_perception/scripts/validate_reid_onnx.py --help
+```
+
+推荐顺序：
+
+1. `uv sync --group export`
+2. 导出 `yolo26n.onnx`
+3. 训练或准备 `reid_resnet50` 权重
+4. 导出 `reid_resnet50_2048.onnx`
+5. 用 `validate_reid_onnx.py` 做输入输出形状校验
+
+若目标机没有外网：
+
+- 建议先在本地机完成 `export`
+- 最终只把 `models/*.onnx` 带到目标机
+- 目标机仅保留 `validate` 或直接跳过 Python 工具链
