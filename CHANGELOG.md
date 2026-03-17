@@ -2,6 +2,24 @@
 
 本文件记录 `ROS2 Smart Follower` 的主要版本变化。
 
+## alpha-0.1.1 - 2026-03-17
+
+### Added
+- 控制侧新增公共头文件：`smart_follower_control/constants.hpp`、`smart_follower_control/lifecycle_utils.hpp`。
+- 新增控制侧拆分模块：`arbiter_runtime.hpp/cpp`、`ultrasonic_runtime.hpp/cpp`。
+- 新增 `test_arbiter_runtime.cpp`，用于覆盖仲裁运行态行为。
+- 为 `TrackedPerson.msg` 和 `PersonPoseArray.msg` 补充 2D bbox / 3D pose 的语义注释。
+
+### Changed
+- 控制侧四个 Lifecycle 节点开始复用最小公共骨架：版本常量、激活判断、频率转周期工具、统一的 `main` 启动样板。
+- `arbiter_node.cpp` 与 `ultrasonic_range_node.cpp` 进一步瘦身，节点类只保留参数/接口/diagnostics glue code。
+- 感知侧与控制侧运行时版本字符串统一提升到 `alpha-0.1.1`。
+- README 补充 `/person_pose` 消息语义说明，明确 `header.frame_id` 只约束 3D 字段。
+
+### Notes
+- 这是可读性与维护性优化，不改外部话题、节点名、参数名与主行为。
+
+
 ## alpha-0.1.0 - 2026-03-17
 
 ### Added

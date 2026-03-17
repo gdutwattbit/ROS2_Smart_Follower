@@ -12,14 +12,25 @@
 
 ## 1. 当前版本
 
-- **当前发布版本：`alpha-0.1.0`**
+- **当前发布版本：`alpha-0.1.1`**
 - **上一稳定快照：`alpha-0.0.4`**
 - **上一调试快照：`dev-0.0.1.1`**
 - **状态：Usable Alpha**
 
-### alpha-0.1.0（2026-03-17）本轮重点
+### alpha-0.1.1（2026-03-17）本轮重点
 
-这一版主要完成了感知节点的结构性重构，目标不是改算法，而是把代码从“能跑”整理成“能维护、能测试、能继续迭代”：
+这一版主要补的是**可读性和语义一致性**，重点不是改算法，而是先把“控制侧公共样板、版本号、消息语义说明”收拢到位：
+
+- 控制侧新增最小公共 helper：`constants.hpp` + `lifecycle_utils.hpp`
+- P1 继续拆分控制侧：新增 `arbiter_runtime.hpp/cpp` 与 `ultrasonic_runtime.hpp/cpp`，把状态机运行态和超声硬件/滤波逻辑从节点类中抽离
+- 控制侧 Lifecycle main 样板、激活判断、频率转周期工具开始复用，降低后续继续拆分时的重复劳动
+- 统一感知侧与控制侧运行时版本字符串到 `alpha-0.1.1`
+- 为 `TrackedPerson.msg` / `PersonPoseArray.msg` 补充 2D bbox 与 3D pose 的语义注释
+- README 补充消息语义说明，避免 `header.frame_id` 与像素 bbox 混淆
+
+### alpha-0.1.0（2026-03-17）上一轮重点
+
+上一版主要完成了感知节点的结构性重构，目标不是改算法，而是把代码从“能跑”整理成“能维护、能测试、能继续迭代”：
 
 - 将超大文件 `perception_node.cpp` 按职责拆分为：
   - `runtime`
@@ -89,6 +100,12 @@ ros2_smart_follower/
 - `PersonPoseArray.msg`
 - `FollowCommand.msg`
 
+消息语义补充：
+- `TrackedPerson.bbox`：同步彩色图像上的**像素坐标**
+- `TrackedPerson.position / velocity`：`PersonPoseArray.header.frame_id` 对应坐标系下的 **3D 信息**
+- `PersonPoseArray.header.stamp`：源图像时间戳
+- `PersonPoseArray.header.frame_id`：只约束 3D 字段，**不约束 bbox**
+
 #### `smart_follower_perception`
 核心职责：
 - 订阅 RGB / Depth / CameraInfo
@@ -129,6 +146,17 @@ ros2_smart_follower/
 - 输出 `person_pose_topic` 默认为**相对话题名**，因此在 `robot_ns:=robot1` 下，实际发布为：
   - `/robot1/person_pose`
 - 输入话题默认是**绝对路径**，不会随命名空间自动变化。
+
+### 4.1.1 `/person_pose` 消息语义
+
+这是当前版本一个容易误读、但现在已经明确写进消息注释和文档的点：
+
+- `PersonPoseArray.header.frame_id` 默认是 `base_footprint`
+- 这表示 **`TrackedPerson.position` / `velocity` 的参考坐标系**
+- 但 `TrackedPerson.bbox` 仍然是 **图像像素空间**，不是 `base_footprint` 坐标
+
+也就是说，当前 `TrackedPerson` 是一个“2D 检测结果 + 3D 目标状态”的混合消息。
+这在工程上是有意为之，但文档上必须写清楚，否则新接手的人很容易误会。
 
 ### 4.2 同步方式
 
@@ -375,6 +403,7 @@ ros2 param set /robot1/ultrasonic_range_node rate 8.0
 - `alpha-0.0.3`：稳定性和参数热更新补强
 - `alpha-0.0.4`：引入 uv CPU-only 工具链
 - `alpha-0.1.0`：感知节点结构重构 + 单元测试补齐
+- `alpha-0.1.1`：控制侧最小公共骨架、版本统一、消息语义澄清
 
 完整历史请见：[CHANGELOG.md](./CHANGELOG.md)
 

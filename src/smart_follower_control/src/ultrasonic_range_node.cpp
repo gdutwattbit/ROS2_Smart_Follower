@@ -1,36 +1,27 @@
 #include <algorithm>
-#include <array>
-#include <chrono>
 #include <cmath>
-#include <cstdint>
-#include <deque>
-#include <filesystem>
 #include <limits>
 #include <memory>
 #include <string>
-#include <thread>
-#include <vector>
 
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
-#include <lifecycle_msgs/msg/transition.hpp>
-#include <lifecycle_msgs/msg/state.hpp>
 #include <sensor_msgs/msg/range.hpp>
 
-#ifdef HAVE_LIBGPIOD
-#include <gpiod.h>
-#endif
+#include "smart_follower_control/constants.hpp"
+#include "smart_follower_control/lifecycle_utils.hpp"
+#include "smart_follower_control/ultrasonic_runtime.hpp"
 
 namespace smart_follower_control
 {
-namespace fs = std::filesystem;
 
 class UltrasonicRangeNode : public rclcpp_lifecycle::LifecycleNode
 {
 public:
   using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
+
   UltrasonicRangeNode()
   : rclcpp_lifecycle::LifecycleNode("ultrasonic_range_node")
   {
@@ -38,12 +29,10 @@ public:
     declare_parameter("window_size", 5);
     declare_parameter("max_range", 3.0);
     declare_parameter("min_range", 0.03);
-
     declare_parameter("left.trig_pin", 23);
     declare_parameter("left.echo_pin", 24);
     declare_parameter("right.trig_pin", 4);
     declare_parameter("right.echo_pin", 14);
-
     declare_parameter("left.topic", std::string("left_ultrasonic/range"));
     declare_parameter("right.topic", std::string("right_ultrasonic/range"));
     declare_parameter("frame_left", std::string("ultrasonic_left_link"));
@@ -51,359 +40,56 @@ public:
   }
 
 private:
-  struct SensorConfig
+  struct Params
   {
-    int trig_pin{0};
-    int echo_pin{0};
-    std::string topic;
-    std::string frame;
-    std::deque<double> history;
-#ifdef HAVE_LIBGPIOD
-    unsigned int trig_offset{0};
-    unsigned int echo_offset{0};
-    gpiod_line_request * trig_request{nullptr};
-    gpiod_line_request * echo_request{nullptr};
-#endif
-  } left_, right_;
-
-  double rate_{10.0};
-  int window_size_{5};
-  double min_range_{0.03};
-  double max_range_{3.0};
+    UltrasonicRuntimeConfig runtime;
+  } p_;
 
   OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Range>::SharedPtr left_pub_;
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Range>::SharedPtr right_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
   diagnostic_updater::Updater diagnostics_{this};
-
-  bool reconfigure_pending_{false};
-  bool gpio_ok_{false};
-  std::string gpio_backend_{"dry"};
-  double last_left_range_{std::numeric_limits<double>::infinity()};
-  double last_right_range_{std::numeric_limits<double>::infinity()};
-  rclcpp::Time last_left_measure_stamp_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_right_measure_stamp_{0, 0, RCL_ROS_TIME};
-  bool measure_left_next_{true};
-#ifdef HAVE_LIBGPIOD
-  std::string gpio_chip_path_;
-#endif
+  UltrasonicRuntime runtime_;
 
   void load_parameters()
   {
-    rate_ = get_parameter("rate").as_double();
-    window_size_ = std::max<int>(1, static_cast<int>(get_parameter("window_size").as_int()));
-    max_range_ = get_parameter("max_range").as_double();
-    min_range_ = get_parameter("min_range").as_double();
-
-    left_.trig_pin = get_parameter("left.trig_pin").as_int();
-    left_.echo_pin = get_parameter("left.echo_pin").as_int();
-    right_.trig_pin = get_parameter("right.trig_pin").as_int();
-    right_.echo_pin = get_parameter("right.echo_pin").as_int();
-
-    left_.topic = get_parameter("left.topic").as_string();
-    right_.topic = get_parameter("right.topic").as_string();
-    left_.frame = get_parameter("frame_left").as_string();
-    right_.frame = get_parameter("frame_right").as_string();
+    p_.runtime.rate = get_parameter("rate").as_double();
+    p_.runtime.window_size = std::max<int>(1, static_cast<int>(get_parameter("window_size").as_int()));
+    p_.runtime.max_range = get_parameter("max_range").as_double();
+    p_.runtime.min_range = get_parameter("min_range").as_double();
+    p_.runtime.left.trig_pin = get_parameter("left.trig_pin").as_int();
+    p_.runtime.left.echo_pin = get_parameter("left.echo_pin").as_int();
+    p_.runtime.right.trig_pin = get_parameter("right.trig_pin").as_int();
+    p_.runtime.right.echo_pin = get_parameter("right.echo_pin").as_int();
+    p_.runtime.left.topic = get_parameter("left.topic").as_string();
+    p_.runtime.right.topic = get_parameter("right.topic").as_string();
+    p_.runtime.left.frame = get_parameter("frame_left").as_string();
+    p_.runtime.right.frame = get_parameter("frame_right").as_string();
+    runtime_.set_config(p_.runtime);
   }
-
-  void reset_runtime_state()
-  {
-#ifdef HAVE_LIBGPIOD
-    release_sensor(left_);
-    release_sensor(right_);
-    gpio_chip_path_.clear();
-#endif
-    left_.history.clear();
-    right_.history.clear();
-    gpio_ok_ = false;
-    gpio_backend_ = "dry";
-    last_left_range_ = std::numeric_limits<double>::infinity();
-    last_right_range_ = std::numeric_limits<double>::infinity();
-    last_left_measure_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-    last_right_measure_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-    measure_left_next_ = true;
-  }
-
-#ifdef HAVE_LIBGPIOD
-  static gpiod_line_request * request_output_line(
-    const std::string & chip_path,
-    unsigned int offset,
-    const char * consumer)
-  {
-    gpiod_chip * chip = gpiod_chip_open(chip_path.c_str());
-    if (!chip) {
-      return nullptr;
-    }
-
-    gpiod_line_settings * settings = gpiod_line_settings_new();
-    gpiod_line_config * line_cfg = gpiod_line_config_new();
-    gpiod_request_config * req_cfg = gpiod_request_config_new();
-    gpiod_line_request * request = nullptr;
-
-    if (!settings || !line_cfg || !req_cfg) {
-      goto cleanup;
-    }
-
-    if (gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_OUTPUT) < 0) {
-      goto cleanup;
-    }
-    if (gpiod_line_settings_set_output_value(settings, GPIOD_LINE_VALUE_INACTIVE) < 0) {
-      goto cleanup;
-    }
-    if (gpiod_line_config_add_line_settings(line_cfg, &offset, 1, settings) < 0) {
-      goto cleanup;
-    }
-    gpiod_request_config_set_consumer(req_cfg, consumer);
-    request = gpiod_chip_request_lines(chip, req_cfg, line_cfg);
-
-cleanup:
-    gpiod_request_config_free(req_cfg);
-    gpiod_line_config_free(line_cfg);
-    gpiod_line_settings_free(settings);
-    gpiod_chip_close(chip);
-    return request;
-  }
-
-  static gpiod_line_request * request_echo_line(
-    const std::string & chip_path,
-    unsigned int offset,
-    const char * consumer)
-  {
-    gpiod_chip * chip = gpiod_chip_open(chip_path.c_str());
-    if (!chip) {
-      return nullptr;
-    }
-
-    gpiod_line_settings * settings = gpiod_line_settings_new();
-    gpiod_line_config * line_cfg = gpiod_line_config_new();
-    gpiod_request_config * req_cfg = gpiod_request_config_new();
-    gpiod_line_request * request = nullptr;
-
-    if (!settings || !line_cfg || !req_cfg) {
-      goto cleanup;
-    }
-
-    if (gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_INPUT) < 0) {
-      goto cleanup;
-    }
-    if (gpiod_line_settings_set_edge_detection(settings, GPIOD_LINE_EDGE_BOTH) < 0) {
-      goto cleanup;
-    }
-    if (gpiod_line_config_add_line_settings(line_cfg, &offset, 1, settings) < 0) {
-      goto cleanup;
-    }
-    gpiod_request_config_set_consumer(req_cfg, consumer);
-    request = gpiod_chip_request_lines(chip, req_cfg, line_cfg);
-
-cleanup:
-    gpiod_request_config_free(req_cfg);
-    gpiod_line_config_free(line_cfg);
-    gpiod_line_settings_free(settings);
-    gpiod_chip_close(chip);
-    return request;
-  }
-
-  std::string detect_gpio_chip_path() const
-  {
-    std::error_code ec;
-    for (const auto & entry : fs::directory_iterator("/dev", ec)) {
-      if (ec) {
-        break;
-      }
-      const auto name = entry.path().filename().string();
-      if (name.rfind("gpiochip", 0) != 0) {
-        continue;
-      }
-
-      gpiod_chip * chip = gpiod_chip_open(entry.path().c_str());
-      if (!chip) {
-        continue;
-      }
-
-      gpiod_chip_info * info = gpiod_chip_get_info(chip);
-      std::string label;
-      if (info && gpiod_chip_info_get_label(info)) {
-        label = gpiod_chip_info_get_label(info);
-      }
-      if (info) {
-        gpiod_chip_info_free(info);
-      }
-      gpiod_chip_close(chip);
-
-      if (label.find("pinctrl-rp1") != std::string::npos) {
-        return entry.path().string();
-      }
-    }
-
-    return "/dev/gpiochip4";
-  }
-
-  bool setup_sensor(SensorConfig & cfg, const std::string & name)
-  {
-    cfg.trig_offset = static_cast<unsigned int>(cfg.trig_pin);
-    cfg.echo_offset = static_cast<unsigned int>(cfg.echo_pin);
-    cfg.trig_request = request_output_line(
-      gpio_chip_path_, cfg.trig_offset, ("smart_follower_" + name + "_trig").c_str());
-    if (!cfg.trig_request) {
-      return false;
-    }
-    cfg.echo_request = request_echo_line(
-      gpio_chip_path_, cfg.echo_offset, ("smart_follower_" + name + "_echo").c_str());
-    if (!cfg.echo_request) {
-      release_sensor(cfg);
-      return false;
-    }
-    drain_edge_events(cfg);
-    return true;
-  }
-
-  void release_sensor(SensorConfig & cfg)
-  {
-    if (cfg.trig_request) {
-      gpiod_line_request_release(cfg.trig_request);
-      cfg.trig_request = nullptr;
-    }
-    if (cfg.echo_request) {
-      gpiod_line_request_release(cfg.echo_request);
-      cfg.echo_request = nullptr;
-    }
-  }
-
-  bool setup_gpiod_backend()
-  {
-    gpio_chip_path_ = detect_gpio_chip_path();
-    if (gpio_chip_path_.empty()) {
-      RCLCPP_ERROR(get_logger(), "Failed to detect GPIO chip for libgpiod");
-      return false;
-    }
-
-    if (!setup_sensor(left_, "left")) {
-      RCLCPP_ERROR(get_logger(), "Failed to request left ultrasonic GPIO lines via libgpiod");
-      release_sensor(left_);
-      release_sensor(right_);
-      return false;
-    }
-    if (!setup_sensor(right_, "right")) {
-      RCLCPP_ERROR(get_logger(), "Failed to request right ultrasonic GPIO lines via libgpiod");
-      release_sensor(left_);
-      release_sensor(right_);
-      return false;
-    }
-
-    RCLCPP_INFO(get_logger(), "libgpiod backend ready on %s", gpio_chip_path_.c_str());
-    return true;
-  }
-
-  void drain_edge_events(SensorConfig & cfg)
-  {
-    if (!cfg.echo_request) {
-      return;
-    }
-    auto * buffer = gpiod_edge_event_buffer_new(8);
-    if (!buffer) {
-      return;
-    }
-    while (gpiod_line_request_wait_edge_events(cfg.echo_request, 0) > 0) {
-      const int ret = gpiod_line_request_read_edge_events(cfg.echo_request, buffer, 8);
-      if (ret <= 0) {
-        break;
-      }
-    }
-    gpiod_edge_event_buffer_free(buffer);
-  }
-
-  bool wait_for_event(
-    SensorConfig & cfg,
-    gpiod_edge_event_type wanted,
-    int64_t timeout_ns,
-    uint64_t & timestamp_ns)
-  {
-    auto * buffer = gpiod_edge_event_buffer_new(4);
-    if (!buffer) {
-      return false;
-    }
-
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::nanoseconds(timeout_ns);
-    bool found = false;
-
-    while (std::chrono::steady_clock::now() < deadline) {
-      const auto remaining = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        deadline - std::chrono::steady_clock::now()).count();
-      const int ready = gpiod_line_request_wait_edge_events(cfg.echo_request, remaining);
-      if (ready <= 0) {
-        break;
-      }
-
-      const int count = gpiod_line_request_read_edge_events(cfg.echo_request, buffer, 4);
-      if (count <= 0) {
-        break;
-      }
-
-      for (int i = 0; i < count; ++i) {
-        gpiod_edge_event * event = gpiod_edge_event_buffer_get_event(buffer, static_cast<unsigned long>(i));
-        if (!event) {
-          continue;
-        }
-        if (gpiod_edge_event_get_line_offset(event) != cfg.echo_offset) {
-          continue;
-        }
-        if (gpiod_edge_event_get_event_type(event) != wanted) {
-          continue;
-        }
-        timestamp_ns = gpiod_edge_event_get_timestamp_ns(event);
-        found = true;
-        break;
-      }
-      if (found) {
-        break;
-      }
-    }
-
-    gpiod_edge_event_buffer_free(buffer);
-    return found;
-  }
-#endif
 
   void recreate_interfaces(bool preserve_activation)
   {
-    const bool was_active = preserve_activation && left_pub_ && right_pub_ &&
-      left_pub_->is_activated() && right_pub_->is_activated();
+    const bool was_active = preserve_activation &&
+      publisher_is_activated(left_pub_) && publisher_is_activated(right_pub_);
     if (was_active) {
-      left_pub_->on_deactivate();
-      right_pub_->on_deactivate();
+      deactivate_publisher(left_pub_);
+      deactivate_publisher(right_pub_);
     }
 
     timer_.reset();
     left_pub_.reset();
     right_pub_.reset();
-    reset_runtime_state();
 
-    left_pub_ = create_publisher<sensor_msgs::msg::Range>(left_.topic, 10);
-    right_pub_ = create_publisher<sensor_msgs::msg::Range>(right_.topic, 10);
-
-#ifdef HAVE_LIBGPIOD
-    gpio_ok_ = setup_gpiod_backend();
-    gpio_backend_ = gpio_ok_ ? "libgpiod" : "dry";
-#else
-    gpio_ok_ = false;
-    gpio_backend_ = "dry";
-#endif
-
-    if (!gpio_ok_) {
-      RCLCPP_WARN(
-        get_logger(),
-        "No usable GPIO backend available, ultrasonic node will publish inf ranges.");
-    }
-
-    timer_ = create_wall_timer(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::duration<double>(1.0 / std::max(1.0, rate_))),
-      std::bind(&UltrasonicRangeNode::on_timer, this));
+    left_pub_ = create_publisher<sensor_msgs::msg::Range>(p_.runtime.left.topic, 10);
+    right_pub_ = create_publisher<sensor_msgs::msg::Range>(p_.runtime.right.topic, 10);
+    runtime_.reinitialize(get_logger());
+    timer_ = create_wall_timer(hz_to_period(p_.runtime.rate), std::bind(&UltrasonicRangeNode::on_timer, this));
 
     if (was_active) {
-      left_pub_->on_activate();
-      right_pub_->on_activate();
+      activate_publisher(left_pub_);
+      activate_publisher(right_pub_);
     }
   }
 
@@ -416,25 +102,20 @@ cleanup:
     diagnostics_.add("ultrasonic_status", this, &UltrasonicRangeNode::diag_callback);
     param_callback_handle_ = this->add_on_set_parameters_callback(
       std::bind(&UltrasonicRangeNode::on_parameters_set, this, std::placeholders::_1));
-
     return CallbackReturn::SUCCESS;
   }
 
   CallbackReturn on_activate(const rclcpp_lifecycle::State &) override
   {
-    left_pub_->on_activate();
-    right_pub_->on_activate();
+    activate_publisher(left_pub_);
+    activate_publisher(right_pub_);
     return CallbackReturn::SUCCESS;
   }
 
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override
   {
-    if (left_pub_) {
-      left_pub_->on_deactivate();
-    }
-    if (right_pub_) {
-      right_pub_->on_deactivate();
-    }
+    deactivate_publisher(left_pub_);
+    deactivate_publisher(right_pub_);
     return CallbackReturn::SUCCESS;
   }
 
@@ -444,58 +125,60 @@ cleanup:
     left_pub_.reset();
     right_pub_.reset();
     param_callback_handle_.reset();
-    reset_runtime_state();
-    reconfigure_pending_ = false;
+    runtime_.clear();
     return CallbackReturn::SUCCESS;
   }
 
-  void apply_parameter_override(const rclcpp::Parameter & param)
+  void apply_parameter_override(Params & target, const rclcpp::Parameter & param)
   {
     const auto & name = param.get_name();
-    if (name == "rate") rate_ = param.as_double();
-    else if (name == "window_size") window_size_ = static_cast<int>(param.as_int());
-    else if (name == "max_range") max_range_ = param.as_double();
-    else if (name == "min_range") min_range_ = param.as_double();
-    else if (name == "left.trig_pin") left_.trig_pin = param.as_int();
-    else if (name == "left.echo_pin") left_.echo_pin = param.as_int();
-    else if (name == "right.trig_pin") right_.trig_pin = param.as_int();
-    else if (name == "right.echo_pin") right_.echo_pin = param.as_int();
-    else if (name == "left.topic") left_.topic = param.as_string();
-    else if (name == "right.topic") right_.topic = param.as_string();
-    else if (name == "frame_left") left_.frame = param.as_string();
-    else if (name == "frame_right") right_.frame = param.as_string();
+    if (name == "rate") target.runtime.rate = param.as_double();
+    else if (name == "window_size") target.runtime.window_size = static_cast<int>(param.as_int());
+    else if (name == "max_range") target.runtime.max_range = param.as_double();
+    else if (name == "min_range") target.runtime.min_range = param.as_double();
+    else if (name == "left.trig_pin") target.runtime.left.trig_pin = param.as_int();
+    else if (name == "left.echo_pin") target.runtime.left.echo_pin = param.as_int();
+    else if (name == "right.trig_pin") target.runtime.right.trig_pin = param.as_int();
+    else if (name == "right.echo_pin") target.runtime.right.echo_pin = param.as_int();
+    else if (name == "left.topic") target.runtime.left.topic = param.as_string();
+    else if (name == "right.topic") target.runtime.right.topic = param.as_string();
+    else if (name == "frame_left") target.runtime.left.frame = param.as_string();
+    else if (name == "frame_right") target.runtime.right.frame = param.as_string();
   }
 
   void log_hot_reload()
   {
     RCLCPP_INFO(
       get_logger(),
-      "[alpha-0.0.4] ultrasonic parameters hot-reloaded: rate=%.2f left=(%d,%d,%s) right=(%d,%d,%s) backend=%s",
-      rate_,
-      left_.trig_pin,
-      left_.echo_pin,
-      left_.topic.c_str(),
-      right_.trig_pin,
-      right_.echo_pin,
-      right_.topic.c_str(),
-      gpio_backend_.c_str());
+      "[%s] ultrasonic parameters hot-reloaded: rate=%.2f left=(%d,%d,%s) right=(%d,%d,%s) backend=%s",
+      kRuntimeVersion,
+      p_.runtime.rate,
+      p_.runtime.left.trig_pin,
+      p_.runtime.left.echo_pin,
+      p_.runtime.left.topic.c_str(),
+      p_.runtime.right.trig_pin,
+      p_.runtime.right.echo_pin,
+      p_.runtime.right.topic.c_str(),
+      runtime_.gpio_backend().c_str());
   }
 
-  rcl_interfaces::msg::SetParametersResult on_parameters_set(
-    const std::vector<rclcpp::Parameter> & params)
+  rcl_interfaces::msg::SetParametersResult on_parameters_set(const std::vector<rclcpp::Parameter> & params)
   {
+    Params candidate = p_;
     for (const auto & param : params) {
-      apply_parameter_override(param);
+      apply_parameter_override(candidate, param);
     }
 
-    rate_ = std::max(1.0, rate_);
-    window_size_ = std::max(1, window_size_);
-    min_range_ = std::max(0.0, min_range_);
-    max_range_ = std::max(min_range_, max_range_);
+    candidate.runtime.rate = std::max(1.0, candidate.runtime.rate);
+    candidate.runtime.window_size = std::max(1, candidate.runtime.window_size);
+    candidate.runtime.min_range = std::max(0.0, candidate.runtime.min_range);
+    candidate.runtime.max_range = std::max(candidate.runtime.min_range, candidate.runtime.max_range);
 
-    const bool active = this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
-    if (active) {
-      reconfigure_pending_ = true;
+    p_ = candidate;
+    runtime_.set_config(p_.runtime);
+
+    if (is_primary_active(*this)) {
+      runtime_.request_reconfigure();
     } else {
       recreate_interfaces(false);
       log_hot_reload();
@@ -507,75 +190,13 @@ cleanup:
     return result;
   }
 
-  double read_distance_m(SensorConfig & cfg)
-  {
-#ifdef HAVE_LIBGPIOD
-    if (!gpio_ok_ || !cfg.trig_request || !cfg.echo_request) {
-      return std::numeric_limits<double>::infinity();
-    }
-
-    constexpr int64_t kTimeoutNs = 30000000LL;
-    drain_edge_events(cfg);
-
-    if (gpiod_line_request_set_value(
-        cfg.trig_request, cfg.trig_offset, GPIOD_LINE_VALUE_INACTIVE) < 0)
-    {
-      return std::numeric_limits<double>::infinity();
-    }
-    std::this_thread::sleep_for(std::chrono::microseconds(2));
-    if (gpiod_line_request_set_value(
-        cfg.trig_request, cfg.trig_offset, GPIOD_LINE_VALUE_ACTIVE) < 0)
-    {
-      return std::numeric_limits<double>::infinity();
-    }
-    std::this_thread::sleep_for(std::chrono::microseconds(15));
-    if (gpiod_line_request_set_value(
-        cfg.trig_request, cfg.trig_offset, GPIOD_LINE_VALUE_INACTIVE) < 0)
-    {
-      return std::numeric_limits<double>::infinity();
-    }
-
-    uint64_t rise_ns = 0;
-    uint64_t fall_ns = 0;
-    if (!wait_for_event(cfg, GPIOD_EDGE_EVENT_RISING_EDGE, kTimeoutNs, rise_ns)) {
-      return std::numeric_limits<double>::infinity();
-    }
-    if (!wait_for_event(cfg, GPIOD_EDGE_EVENT_FALLING_EDGE, kTimeoutNs, fall_ns)) {
-      return std::numeric_limits<double>::infinity();
-    }
-    if (fall_ns <= rise_ns) {
-      return std::numeric_limits<double>::infinity();
-    }
-
-    const double pulse_us = static_cast<double>(fall_ns - rise_ns) / 1000.0;
-    return pulse_us * 0.0001715;
-#else
-    (void)cfg;
-    return std::numeric_limits<double>::infinity();
-#endif
-  }
-
-  double median_filtered(SensorConfig & cfg, double sample)
-  {
-    if (!std::isfinite(sample)) {
-      return std::numeric_limits<double>::infinity();
-    }
-    cfg.history.push_back(sample);
-    while (static_cast<int>(cfg.history.size()) > window_size_) {
-      cfg.history.pop_front();
-    }
-    std::vector<double> tmp(cfg.history.begin(), cfg.history.end());
-    std::sort(tmp.begin(), tmp.end());
-    return tmp[tmp.size() / 2];
-  }
-
   void publish_range(
     const rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Range>::SharedPtr & pub,
     const std::string & frame,
     double range,
     const rclcpp::Time & stamp)
   {
-    if (!pub || !pub->is_activated()) {
+    if (!publisher_is_activated(pub)) {
       return;
     }
 
@@ -584,10 +205,10 @@ cleanup:
     msg.header.frame_id = frame;
     msg.radiation_type = sensor_msgs::msg::Range::ULTRASOUND;
     msg.field_of_view = 0.52;
-    msg.min_range = min_range_;
-    msg.max_range = max_range_;
+    msg.min_range = p_.runtime.min_range;
+    msg.max_range = p_.runtime.max_range;
     if (std::isfinite(range)) {
-      msg.range = static_cast<float>(std::clamp(range, min_range_, max_range_));
+      msg.range = static_cast<float>(std::clamp(range, p_.runtime.min_range, p_.runtime.max_range));
     } else {
       msg.range = std::numeric_limits<float>::infinity();
     }
@@ -596,46 +217,35 @@ cleanup:
 
   void on_timer()
   {
-    if (this->get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+    if (!is_primary_active(*this)) {
       return;
     }
 
-    if (reconfigure_pending_) {
-      reconfigure_pending_ = false;
+    if (runtime_.consume_reconfigure_request()) {
       recreate_interfaces(true);
       log_hot_reload();
       return;
     }
 
-    if (measure_left_next_) {
-      last_left_range_ = median_filtered(left_, read_distance_m(left_));
-      last_left_measure_stamp_ = now();
-    } else {
-      last_right_range_ = median_filtered(right_, read_distance_m(right_));
-      last_right_measure_stamp_ = now();
-    }
-    measure_left_next_ = !measure_left_next_;
-
-    publish_range(left_pub_, left_.frame, last_left_range_, last_left_measure_stamp_);
-    publish_range(right_pub_, right_.frame, last_right_range_, last_right_measure_stamp_);
-
+    runtime_.measure_step(now());
+    publish_range(left_pub_, p_.runtime.left.frame, runtime_.last_left_range(), runtime_.last_left_stamp());
+    publish_range(right_pub_, p_.runtime.right.frame, runtime_.last_right_range(), runtime_.last_right_stamp());
     diagnostics_.force_update();
   }
 
   void diag_callback(diagnostic_updater::DiagnosticStatusWrapper & stat)
   {
-    stat.add("gpio_ok", gpio_ok_);
-    stat.add("gpio_backend", gpio_backend_);
-#ifdef HAVE_LIBGPIOD
-    stat.add("gpio_chip_path", gpio_chip_path_);
-#endif
-    stat.add("last_left_range", last_left_range_);
-    stat.add("last_right_range", last_right_range_);
-    stat.add("last_left_age_s", last_left_measure_stamp_.nanoseconds() > 0 ? (now() - last_left_measure_stamp_).seconds() : -1.0);
-    stat.add("last_right_age_s", last_right_measure_stamp_.nanoseconds() > 0 ? (now() - last_right_measure_stamp_).seconds() : -1.0);
-    stat.add("measure_left_next", measure_left_next_);
-    stat.add("left_samples", static_cast<int>(left_.history.size()));
-    stat.add("right_samples", static_cast<int>(right_.history.size()));
+    const auto snapshot = runtime_.snapshot(now());
+    stat.add("gpio_ok", snapshot.gpio_ok);
+    stat.add("gpio_backend", snapshot.gpio_backend);
+    stat.add("gpio_chip_path", snapshot.gpio_chip_path);
+    stat.add("last_left_range", snapshot.last_left_range);
+    stat.add("last_right_range", snapshot.last_right_range);
+    stat.add("last_left_age_s", snapshot.last_left_age_s);
+    stat.add("last_right_age_s", snapshot.last_right_age_s);
+    stat.add("measure_left_next", snapshot.measure_left_next);
+    stat.add("left_samples", snapshot.left_samples);
+    stat.add("right_samples", snapshot.right_samples);
     stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Ultrasonic node active");
   }
 };
@@ -644,13 +254,5 @@ cleanup:
 
 int main(int argc, char ** argv)
 {
-  rclcpp::init(argc, argv);
-  auto node = std::make_shared<smart_follower_control::UltrasonicRangeNode>();
-  node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
-  node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE);
-  rclcpp::executors::SingleThreadedExecutor exec;
-  exec.add_node(node->get_node_base_interface());
-  exec.spin();
-  rclcpp::shutdown();
-  return 0;
+  return smart_follower_control::run_lifecycle_node<smart_follower_control::UltrasonicRangeNode>(argc, argv);
 }

@@ -15,6 +15,8 @@
 #include <lifecycle_msgs/msg/state.hpp>
 #include <smart_follower_msgs/msg/person_pose_array.hpp>
 
+#include "smart_follower_control/constants.hpp"
+#include "smart_follower_control/lifecycle_utils.hpp"
 #include "smart_follower_control/pid_controller.hpp"
 
 namespace smart_follower_control
@@ -131,7 +133,7 @@ private:
 
   void recreate_interfaces(bool preserve_activation)
   {
-    const bool was_active = preserve_activation && cmd_pub_ && cmd_pub_->is_activated();
+    const bool was_active = preserve_activation && publisher_is_activated(cmd_pub_);
     if (was_active) {
       publish_zero();
       cmd_pub_->on_deactivate();
@@ -147,13 +149,12 @@ private:
       10,
       std::bind(&FollowerControllerNode::on_pose, this, std::placeholders::_1));
 
-    const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, p_.control_rate));
     timer_ = create_wall_timer(
-      std::chrono::duration_cast<std::chrono::milliseconds>(period),
+      hz_to_period(p_.control_rate),
       std::bind(&FollowerControllerNode::on_timer, this));
 
     if (was_active) {
-      cmd_pub_->on_activate();
+      activate_publisher(cmd_pub_);
     }
   }
 
@@ -172,16 +173,14 @@ private:
 
   CallbackReturn on_activate(const rclcpp_lifecycle::State &) override
   {
-    cmd_pub_->on_activate();
+    activate_publisher(cmd_pub_);
     return CallbackReturn::SUCCESS;
   }
 
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override
   {
     publish_zero();
-    if (cmd_pub_) {
-      cmd_pub_->on_deactivate();
-    }
+    deactivate_publisher(cmd_pub_);
     return CallbackReturn::SUCCESS;
   }
 
@@ -236,11 +235,12 @@ private:
 
     p_ = candidate;
     configure_controllers();
-    recreate_interfaces(this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+    recreate_interfaces(is_primary_active(*this));
 
     RCLCPP_INFO(
       get_logger(),
-      "[alpha-0.0.4] controller parameters hot-reloaded: pose=%s cmd=%s rate=%.2f timeout=%.2f",
+      "[%s] controller parameters hot-reloaded: pose=%s cmd=%s rate=%.2f timeout=%.2f",
+      kRuntimeVersion,
       p_.person_pose_topic.c_str(),
       p_.cmd_vel_follow_topic.c_str(),
       p_.control_rate,
@@ -340,9 +340,7 @@ private:
     cmd.angular.z = w;
     last_cmd_ = cmd;
 
-    if (cmd_pub_ && cmd_pub_->is_activated()) {
-      cmd_pub_->publish(cmd);
-    }
+    publish_if_activated(cmd_pub_, cmd);
 
     diagnostics_.force_update();
   }
@@ -359,9 +357,7 @@ private:
     pid_t_.reset();
     geometry_msgs::msg::Twist cmd;
     last_cmd_ = cmd;
-    if (cmd_pub_ && cmd_pub_->is_activated()) {
-      cmd_pub_->publish(cmd);
-    }
+    publish_if_activated(cmd_pub_, cmd);
   }
 
   void diag_callback(diagnostic_updater::DiagnosticStatusWrapper & stat)
@@ -377,13 +373,5 @@ private:
 
 int main(int argc, char ** argv)
 {
-  rclcpp::init(argc, argv);
-  auto node = std::make_shared<smart_follower_control::FollowerControllerNode>();
-  node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
-  node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE);
-  rclcpp::executors::SingleThreadedExecutor exec;
-  exec.add_node(node->get_node_base_interface());
-  exec.spin();
-  rclcpp::shutdown();
-  return 0;
+  return smart_follower_control::run_lifecycle_node<smart_follower_control::FollowerControllerNode>(argc, argv);
 }

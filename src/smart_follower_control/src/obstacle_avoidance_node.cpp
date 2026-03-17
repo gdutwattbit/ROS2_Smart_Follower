@@ -17,6 +17,9 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/range.hpp>
 
+#include "smart_follower_control/constants.hpp"
+#include "smart_follower_control/lifecycle_utils.hpp"
+
 namespace smart_follower_control
 {
 namespace
@@ -155,7 +158,7 @@ private:
 
   void recreate_interfaces(bool preserve_activation)
   {
-    const bool was_active = preserve_activation && avoid_pub_ && avoid_pub_->is_activated();
+    const bool was_active = preserve_activation && publisher_is_activated(avoid_pub_);
     if (was_active) {
       publish_zero();
       avoid_pub_->on_deactivate();
@@ -207,12 +210,11 @@ private:
 
     avoid_pub_ = create_publisher<geometry_msgs::msg::Twist>(p_.cmd_vel_avoid_topic, 10);
     timer_ = create_wall_timer(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::duration<double>(1.0 / std::max(1.0, p_.rate))),
+      hz_to_period(p_.rate),
       std::bind(&ObstacleAvoidanceNode::on_timer, this));
 
     if (was_active) {
-      avoid_pub_->on_activate();
+      activate_publisher(avoid_pub_);
     }
   }
 
@@ -231,16 +233,14 @@ private:
 
   CallbackReturn on_activate(const rclcpp_lifecycle::State &) override
   {
-    avoid_pub_->on_activate();
+    activate_publisher(avoid_pub_);
     return CallbackReturn::SUCCESS;
   }
 
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override
   {
     publish_zero();
-    if (avoid_pub_) {
-      avoid_pub_->on_deactivate();
-    }
+    deactivate_publisher(avoid_pub_);
     return CallbackReturn::SUCCESS;
   }
 
@@ -296,11 +296,12 @@ private:
     candidate.depth_sample_stride = std::max(1, candidate.depth_sample_stride);
 
     p_ = candidate;
-    recreate_interfaces(this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+    recreate_interfaces(is_primary_active(*this));
 
     RCLCPP_INFO(
       get_logger(),
-      "[alpha-0.0.4] avoidance parameters hot-reloaded: left=%s right=%s depth=%s cmd=%s rate=%.2f stride=%d",
+      "[%s] avoidance parameters hot-reloaded: left=%s right=%s depth=%s cmd=%s rate=%.2f stride=%d",
+      kRuntimeVersion,
       p_.left_topic.c_str(),
       p_.right_topic.c_str(),
       p_.depth_topic.c_str(),
@@ -440,18 +441,14 @@ private:
       out.angular.z = (left < right) ? -std::abs(p_.slow_turn_speed) : std::abs(p_.slow_turn_speed);
     }
 
-    if (avoid_pub_ && avoid_pub_->is_activated()) {
-      avoid_pub_->publish(out);
-    }
+    publish_if_activated(avoid_pub_, out);
 
     diagnostics_.force_update();
   }
 
   void publish_zero()
   {
-    if (avoid_pub_ && avoid_pub_->is_activated()) {
-      avoid_pub_->publish(geometry_msgs::msg::Twist());
-    }
+    publish_if_activated(avoid_pub_, geometry_msgs::msg::Twist());
   }
 
   void diag_callback(diagnostic_updater::DiagnosticStatusWrapper & stat)
@@ -471,13 +468,5 @@ private:
 
 int main(int argc, char ** argv)
 {
-  rclcpp::init(argc, argv);
-  auto node = std::make_shared<smart_follower_control::ObstacleAvoidanceNode>();
-  node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
-  node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE);
-  rclcpp::executors::SingleThreadedExecutor exec;
-  exec.add_node(node->get_node_base_interface());
-  exec.spin();
-  rclcpp::shutdown();
-  return 0;
+  return smart_follower_control::run_lifecycle_node<smart_follower_control::ObstacleAvoidanceNode>(argc, argv);
 }
