@@ -223,11 +223,26 @@ private:
 
   void diag_callback(diagnostic_updater::DiagnosticStatusWrapper & stat)
   {
-    const auto snapshot = runtime_.snapshot();
+    const auto snapshot = runtime_.snapshot(now());
     stat.add("last_cmd_v", snapshot.last_cmd_v);
     stat.add("last_cmd_w", snapshot.last_cmd_w);
     stat.add("target_valid", snapshot.target_valid);
-    stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Follower control active");
+    stat.add("target_seen", snapshot.target_seen);
+    stat.add("target_age_s", snapshot.target_age_s);
+
+    int level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+    std::string message = "Follower control active";
+    if (!snapshot.target_seen) {
+      level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+      message = "Waiting for target input";
+    } else if (snapshot.target_age_s > std::max(2.0, p_.runtime.target_timeout * 4.0)) {
+      level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+      message = "Target input stale";
+    } else if (!snapshot.target_valid || snapshot.target_age_s > p_.runtime.target_timeout) {
+      level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+      message = "Target input timed out";
+    }
+    stat.summary(level, message);
   }
 };
 

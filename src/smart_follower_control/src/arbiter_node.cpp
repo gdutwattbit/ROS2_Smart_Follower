@@ -271,7 +271,20 @@ private:
     stat.add("stop_latched", snapshot.stop_latched);
     stat.add("avoid_latched", snapshot.avoid_latched);
     stat.add("last_target_age_s", snapshot.last_target_age_s);
-    stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Arbiter running");
+
+    int level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+    std::string message = "Arbiter running";
+    if (snapshot.stop_latched) {
+      level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+      message = "Arbiter stop latched";
+    } else if (snapshot.last_target_age_s < 0.0) {
+      level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+      message = "Waiting for confirmed target";
+    } else if (snapshot.mode == ArbiterMode::SEARCH || snapshot.mode == ArbiterMode::FOLLOW_DEGRADED) {
+      level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+      message = "Arbiter running in degraded mode";
+    }
+    stat.summary(level, message);
   }
 };
 

@@ -123,6 +123,11 @@ install(DIRECTORY config/
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_lint_cmake REQUIRED)
+  find_package(ament_cmake_xmllint REQUIRED)
+  ament_lint_cmake()
+  ament_xmllint()
+
 
   ament_add_gtest(test_arbiter_sm test/test_arbiter_sm.cpp)
   if(TARGET test_arbiter_sm)

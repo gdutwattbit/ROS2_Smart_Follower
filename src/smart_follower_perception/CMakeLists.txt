@@ -141,6 +141,11 @@ install(DIRECTORY scripts/
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_lint_cmake REQUIRED)
+  find_package(ament_cmake_xmllint REQUIRED)
+  ament_lint_cmake()
+  ament_xmllint()
+
 
   ament_add_gtest(test_assignment test/test_assignment.cpp)
   if(TARGET test_assignment)

@@ -246,7 +246,23 @@ private:
     stat.add("measure_left_next", snapshot.measure_left_next);
     stat.add("left_samples", snapshot.left_samples);
     stat.add("right_samples", snapshot.right_samples);
-    stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Ultrasonic node active");
+
+    const bool left_stale = snapshot.last_left_age_s < 0.0 || snapshot.last_left_age_s > 1.5;
+    const bool right_stale = snapshot.last_right_age_s < 0.0 || snapshot.last_right_age_s > 1.5;
+
+    int level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+    std::string message = "Ultrasonic node active";
+    if (!snapshot.gpio_ok) {
+      level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+      message = "Ultrasonic running in dry mode";
+    } else if (left_stale && right_stale) {
+      level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+      message = "Ultrasonic data unavailable";
+    } else if (left_stale || right_stale) {
+      level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+      message = "Ultrasonic data partial";
+    }
+    stat.summary(level, message);
   }
 };
 

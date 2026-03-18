@@ -382,6 +382,7 @@ private:
     if (person_pub_ && person_pub_->is_activated()) {
       person_pub_->publish(out);
       stats_.person_pose_publish_count += 1;
+      stats_.last_person_pose_publish_stamp = this->now();
       RCLCPP_INFO_THROTTLE(
         get_logger(),
         *get_clock(),
@@ -409,6 +410,8 @@ private:
       lock_manager_.lock_id(),
       lock_manager_.lock_state(),
       lock_manager_.last_lock_confirmed_time(),
+      yolo_.ready(),
+      reid_.ready(),
       this->now());
   }
 

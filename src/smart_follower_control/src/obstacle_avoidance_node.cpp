@@ -258,15 +258,32 @@ private:
 
   void diag_callback(diagnostic_updater::DiagnosticStatusWrapper & stat)
   {
-    const auto snapshot = runtime_.snapshot();
+    const auto snapshot = runtime_.snapshot(now());
     stat.add("left_dist", snapshot.left_dist);
     stat.add("right_dist", snapshot.right_dist);
     stat.add("depth_dist", snapshot.depth_dist);
+    stat.add("left_age_s", snapshot.left_age_s);
+    stat.add("right_age_s", snapshot.right_age_s);
+    stat.add("depth_age_s", snapshot.depth_age_s);
     stat.add("depth_message_count", snapshot.depth_message_count);
     stat.add("depth_process_count", snapshot.depth_process_count);
     stat.add("depth_sample_stride", snapshot.depth_sample_stride);
     stat.add("current_speed", snapshot.current_speed);
-    stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Obstacle avoidance active");
+
+    const bool left_stale = snapshot.left_age_s < 0.0 || snapshot.left_age_s > 1.0;
+    const bool right_stale = snapshot.right_age_s < 0.0 || snapshot.right_age_s > 1.0;
+    const bool depth_stale = snapshot.depth_age_s < 0.0 || snapshot.depth_age_s > 1.0 || snapshot.depth_process_count == 0;
+
+    int level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+    std::string message = "Obstacle avoidance active";
+    if (left_stale && right_stale && depth_stale) {
+      level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+      message = "Obstacle inputs unavailable";
+    } else if (left_stale || right_stale || depth_stale || snapshot.depth_message_count == 0) {
+      level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+      message = "Obstacle inputs degraded";
+    }
+    stat.summary(level, message);
   }
 };
 

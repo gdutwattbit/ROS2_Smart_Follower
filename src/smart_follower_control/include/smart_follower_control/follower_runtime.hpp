@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <optional>
 
@@ -38,6 +38,8 @@ struct FollowerRuntimeSnapshot
   double last_cmd_v{0.0};
   double last_cmd_w{0.0};
   bool target_valid{false};
+  bool target_seen{false};
+  double target_age_s{-1.0};
 };
 
 class FollowerRuntime
@@ -50,7 +52,7 @@ public:
   void reset_output();
   void on_pose(const smart_follower_msgs::msg::PersonPoseArray & msg);
   geometry_msgs::msg::Twist compute_command(const rclcpp::Time & now_time);
-  FollowerRuntimeSnapshot snapshot() const;
+  FollowerRuntimeSnapshot snapshot(const rclcpp::Time & now_time) const;
 
 private:
   struct TargetState

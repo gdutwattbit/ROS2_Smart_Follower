@@ -33,6 +33,9 @@ struct ObstacleRuntimeSnapshot
   double left_dist{0.0};
   double right_dist{0.0};
   double depth_dist{0.0};
+  double left_age_s{-1.0};
+  double right_age_s{-1.0};
+  double depth_age_s{-1.0};
   int depth_message_count{0};
   int depth_process_count{0};
   int depth_sample_stride{0};
@@ -52,7 +55,7 @@ public:
   void on_cmd_vel(const geometry_msgs::msg::Twist & msg);
 
   geometry_msgs::msg::Twist compute_command(const rclcpp::Time & now_time);
-  ObstacleRuntimeSnapshot snapshot() const;
+  ObstacleRuntimeSnapshot snapshot(const rclcpp::Time & now_time) const;
 
 private:
   void refresh_depth_from_latest();

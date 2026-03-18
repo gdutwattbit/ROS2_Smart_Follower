@@ -118,12 +118,15 @@ geometry_msgs::msg::Twist ObstacleRuntime::compute_command(const rclcpp::Time & 
   return out;
 }
 
-ObstacleRuntimeSnapshot ObstacleRuntime::snapshot() const
+ObstacleRuntimeSnapshot ObstacleRuntime::snapshot(const rclcpp::Time & now_time) const
 {
   ObstacleRuntimeSnapshot out;
   out.left_dist = left_dist_;
   out.right_dist = right_dist_;
   out.depth_dist = depth_dist_;
+  out.left_age_s = left_stamp_.nanoseconds() > 0 ? std::max(0.0, (now_time - left_stamp_).seconds()) : -1.0;
+  out.right_age_s = right_stamp_.nanoseconds() > 0 ? std::max(0.0, (now_time - right_stamp_).seconds()) : -1.0;
+  out.depth_age_s = depth_stamp_.nanoseconds() > 0 ? std::max(0.0, (now_time - depth_stamp_).seconds()) : -1.0;
   out.depth_message_count = static_cast<int>(depth_message_count_);
   out.depth_process_count = static_cast<int>(depth_process_count_);
   out.depth_sample_stride = config_.depth_sample_stride;

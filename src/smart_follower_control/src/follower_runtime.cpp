@@ -1,4 +1,4 @@
-﻿#include "smart_follower_control/follower_runtime.hpp"
+#include "smart_follower_control/follower_runtime.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -93,12 +93,16 @@ geometry_msgs::msg::Twist FollowerRuntime::compute_command(const rclcpp::Time & 
   return last_cmd_;
 }
 
-FollowerRuntimeSnapshot FollowerRuntime::snapshot() const
+FollowerRuntimeSnapshot FollowerRuntime::snapshot(const rclcpp::Time & now_time) const
 {
   FollowerRuntimeSnapshot out;
   out.last_cmd_v = last_cmd_.linear.x;
   out.last_cmd_w = last_cmd_.angular.z;
   out.target_valid = last_target_.valid;
+  out.target_seen = last_target_.stamp.nanoseconds() > 0;
+  if (out.target_seen) {
+    out.target_age_s = std::max(0.0, (now_time - last_target_.stamp).seconds());
+  }
   return out;
 }
 

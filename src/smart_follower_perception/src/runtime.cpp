@@ -343,13 +343,19 @@ std::array<float, kFeatureDim> ReidExtractor::extract(const cv::Mat & bgr, const
     input_shape.size());
   std::vector<const char *> input_names{input_name_.c_str()};
   std::vector<const char *> output_names{output_name_.c_str()};
-  auto outputs = session_->Run(
-    Ort::RunOptions{nullptr},
-    input_names.data(),
-    &input,
-    1,
-    output_names.data(),
-    1);
+  std::vector<Ort::Value> outputs;
+  try {
+    outputs = session_->Run(
+      Ort::RunOptions{nullptr},
+      input_names.data(),
+      &input,
+      1,
+      output_names.data(),
+      1);
+  } catch (const Ort::Exception & ex) {
+    std::fprintf(stderr, "[smart_follower][reid] ONNXRuntime inference failed: %s\n", ex.what());
+    return feat;
+  }
   if (outputs.empty()) {
     return feat;
   }
