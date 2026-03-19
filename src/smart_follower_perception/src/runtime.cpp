@@ -368,17 +368,28 @@ std::array<float, kFeatureDim> ReidExtractor::extract(const cv::Mat & bgr, const
       total *= d;
     }
   }
-  if (total != kFeatureDim) {
+  if (total <= 0) {
     output_dim_mismatch_ = true;
-    output_dim_error_msg_ = "ReID output dim mismatch, expected " +
+    output_dim_error_msg_ = "ReID output dim invalid: " + std::to_string(total);
+    return feat;
+  }
+  if (total > kFeatureDim) {
+    output_dim_mismatch_ = true;
+    output_dim_error_msg_ = "ReID output dim mismatch, expected <= " +
       std::to_string(kFeatureDim) + ", got " + std::to_string(total);
     return feat;
   }
+  if (total != kFeatureDim) {
+    output_dim_mismatch_ = true;
+    output_dim_error_msg_ = "ReID output dim " + std::to_string(total) +
+      " padded to " + std::to_string(kFeatureDim) + " for benchmarking compatibility";
+  }
 
   double norm = 0.0;
-  for (int i = 0; i < kFeatureDim; ++i) {
-    feat[i] = out_data[i];
-    norm += static_cast<double>(feat[i]) * static_cast<double>(feat[i]);
+  for (int64_t i = 0; i < total; ++i) {
+    feat[static_cast<std::size_t>(i)] = out_data[i];
+    norm += static_cast<double>(feat[static_cast<std::size_t>(i)]) *
+      static_cast<double>(feat[static_cast<std::size_t>(i)]);
   }
   norm = std::sqrt(std::max(1e-12, norm));
   for (auto & v : feat) {

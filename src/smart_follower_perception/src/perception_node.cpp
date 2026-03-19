@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -295,8 +296,14 @@ private:
       return;
     }
 
-    const auto t0 = this->now();
+    using Clock = std::chrono::steady_clock;
+    const auto elapsed_ms = [](const Clock::time_point & begin, const Clock::time_point & end) {
+      return std::chrono::duration<double, std::milli>(end - begin).count();
+    };
+
+    const auto frame_begin = Clock::now();
     camera_model_.fromCameraInfo(*info_msg);
+    const auto after_camera_info = Clock::now();
 
     cv::Mat color;
     cv::Mat depth;
@@ -311,6 +318,7 @@ private:
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "cv_bridge error: %s", ex.what());
       return;
     }
+    const auto after_cv_bridge = Clock::now();
 
     stats_.processed_frame_counter += 1;
     const bool run_detect = (stats_.processed_frame_counter % params_.detect_every_n_frames == 0);
@@ -325,9 +333,17 @@ private:
       stats_.processed_frame_counter,
       run_detect ? 1 : 0);
 
+    double yolo_ms = 0.0;
+    double depth_ms = 0.0;
+    double reid_ms = 0.0;
+    double recover_ms = 0.0;
     std::vector<Detection> detections;
     if (run_detect) {
+      const auto yolo_begin = Clock::now();
       auto detector_results = yolo_.detect(color);
+      const auto yolo_end = Clock::now();
+      yolo_ms = elapsed_ms(yolo_begin, yolo_end);
+
       detections.reserve(detector_results.size());
       for (const auto & det : detector_results) {
         Detection detection;
@@ -335,20 +351,30 @@ private:
         detection.confidence = det.conf;
         const int cx = static_cast<int>(detection.bbox.x + detection.bbox.width * 0.5F);
         const int cy = static_cast<int>(detection.bbox.y + detection.bbox.height * 0.5F);
+
+        const auto depth_begin = Clock::now();
         detection.depth_m = sample_depth_m(depth, cx, cy, params_.depth_min_m, params_.depth_max_m);
+        const auto depth_end = Clock::now();
+        depth_ms += elapsed_ms(depth_begin, depth_end);
 
         bool feature_valid = false;
+        const auto reid_begin = Clock::now();
         detection.feature = reid_.extract(color, detection.bbox, feature_valid);
+        const auto reid_end = Clock::now();
+        reid_ms += elapsed_ms(reid_begin, reid_end);
         detection.feature_valid = feature_valid;
 
         if (
           lock_manager_.lock_state() == smart_follower_msgs::msg::PersonPoseArray::LOST &&
           feature_valid)
         {
+          const auto recover_begin = Clock::now();
           auto recovered = tracker_.try_recover_lock_from_memory(
             detection,
             stamp,
             lock_manager_.lock_id());
+          const auto recover_end = Clock::now();
+          recover_ms += elapsed_ms(recover_begin, recover_end);
           if (recovered.has_value()) {
             detection.recovered_track_id = *recovered;
           }
@@ -363,12 +389,18 @@ private:
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "%s", reid_dim_error.c_str());
     }
 
+    const auto tracking_begin = Clock::now();
     auto track_result = tracker_.run_tracking(detections, color.size(), stamp, run_detect);
+    const auto tracking_end = Clock::now();
     if (track_result.recovered_track_id.has_value()) {
       lock_manager_.set_lock_id(*track_result.recovered_track_id);
     }
-    lock_manager_.update(tracker_.tracks(), color.size(), stamp);
 
+    const auto lock_begin = Clock::now();
+    lock_manager_.update(tracker_.tracks(), color.size(), stamp);
+    const auto lock_end = Clock::now();
+
+    const auto message_begin = Clock::now();
     smart_follower_msgs::msg::PersonPoseArray out;
     out.header = color_msg->header;
     out.header.frame_id = params_.base_frame;
@@ -378,9 +410,14 @@ private:
     for (const auto & kv : tracker_.tracks()) {
       out.persons.push_back(to_msg(kv.second, depth_msg->header));
     }
+    const auto message_end = Clock::now();
 
+    double publish_ms = 0.0;
     if (person_pub_ && person_pub_->is_activated()) {
+      const auto publish_begin = Clock::now();
       person_pub_->publish(out);
+      const auto publish_end = Clock::now();
+      publish_ms = elapsed_ms(publish_begin, publish_end);
       stats_.person_pose_publish_count += 1;
       stats_.last_person_pose_publish_stamp = this->now();
       RCLCPP_INFO_THROTTLE(
@@ -396,8 +433,57 @@ private:
         detections.size());
     }
 
+    const auto frame_end = Clock::now();
+    const double camera_info_ms = elapsed_ms(frame_begin, after_camera_info);
+    const double cv_bridge_ms = elapsed_ms(after_camera_info, after_cv_bridge);
+    const double tracking_ms = elapsed_ms(tracking_begin, tracking_end);
+    const double lock_ms = elapsed_ms(lock_begin, lock_end);
+    const double message_ms = elapsed_ms(message_begin, message_end);
+    const double total_ms = elapsed_ms(frame_begin, frame_end);
+
     stats_.last_detection_count = detections.size();
-    stats_.last_infer_ms = (this->now() - t0).seconds() * 1000.0;
+    stats_.last_infer_ms = total_ms;
+    stats_.profile.observe(
+      camera_info_ms,
+      cv_bridge_ms,
+      yolo_ms,
+      depth_ms,
+      reid_ms,
+      recover_ms,
+      tracking_ms,
+      lock_ms,
+      message_ms,
+      publish_ms,
+      total_ms,
+      run_detect,
+      detections.size(),
+      out.persons.size());
+
+    RCLCPP_INFO_THROTTLE(
+      get_logger(),
+      *get_clock(),
+      5000,
+      "[%s] profile avg_ms total=%.2f camera_info=%.2f cv_bridge=%.2f yolo=%.2f depth=%.2f reid=%.2f recover=%.2f tracking=%.2f lock=%.2f message=%.2f publish=%.2f | last_ms total=%.2f yolo=%.2f reid=%.2f message=%.2f det=%zu tracks=%zu run_detect=%d",
+      kRuntimeVersion,
+      stats_.profile.avg(stats_.profile.sum_total_ms),
+      stats_.profile.avg(stats_.profile.sum_camera_info_ms),
+      stats_.profile.avg(stats_.profile.sum_cv_bridge_ms),
+      stats_.profile.avg(stats_.profile.sum_yolo_ms),
+      stats_.profile.avg(stats_.profile.sum_depth_ms),
+      stats_.profile.avg(stats_.profile.sum_reid_ms),
+      stats_.profile.avg(stats_.profile.sum_recover_ms),
+      stats_.profile.avg(stats_.profile.sum_tracking_ms),
+      stats_.profile.avg(stats_.profile.sum_lock_ms),
+      stats_.profile.avg(stats_.profile.sum_message_ms),
+      stats_.profile.avg(stats_.profile.sum_publish_ms),
+      stats_.profile.last_total_ms,
+      stats_.profile.last_yolo_ms,
+      stats_.profile.last_reid_ms,
+      stats_.profile.last_message_ms,
+      detections.size(),
+      out.persons.size(),
+      run_detect ? 1 : 0);
+
     diagnostics_.force_update();
   }
 
