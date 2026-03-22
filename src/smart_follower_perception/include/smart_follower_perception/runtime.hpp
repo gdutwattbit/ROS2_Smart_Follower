@@ -50,7 +50,7 @@ private:
 
   std::string model_path_;
   int input_w_{640};
-  int input_h_{640};
+  int input_h_{480};
   int person_class_id_{0};
   float conf_threshold_{0.25F};
   OrtRuntimeConfig ort_config_{};

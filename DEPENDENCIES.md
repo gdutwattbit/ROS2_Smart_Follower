@@ -120,8 +120,8 @@
 
 运行前建议准备：
 
-- `models/yolo26n.onnx`
-- `models/reid_resnet50_2048.onnx`
+- `models/yolo26n_static_480x640_simplify_e2e.onnx`
+- `models/osnet_x0_5_512.onnx`
 
 当前仓库内未包含实际模型文件。
 

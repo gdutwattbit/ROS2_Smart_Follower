@@ -19,8 +19,8 @@ struct PerceptionParams
   std::string person_pose_topic{"person_pose"};
   std::string follow_command_topic{"follow_command"};
   std::string base_frame{"base_footprint"};
-  std::string yolo_model_path{"models/yolo26n.onnx"};
-  std::string reid_model_path{"models/reid_resnet50_2048.onnx"};
+  std::string yolo_model_path{"models/yolo26n_static_480x640_simplify_e2e.onnx"};
+  std::string reid_model_path{"models/osnet_x0_5_512.onnx"};
 
   int process_every_n_frames{3};
   int detect_every_n_frames{1};
@@ -46,13 +46,13 @@ struct PerceptionParams
   float lock_center_roi_ratio{0.6F};
   float lock_target_area_ratio{0.04F};
   int yolo_input_w{640};
-  int yolo_input_h{640};
+  int yolo_input_h{480};
   int reid_input_w{128};
   int reid_input_h{256};
   int person_class_id{0};
   float yolo_conf_threshold{0.25F};
-  OrtRuntimeConfig yolo_ort;
-  OrtRuntimeConfig reid_ort;
+  OrtRuntimeConfig yolo_ort{3, 1, false};
+  OrtRuntimeConfig reid_ort{1, 1, false};
   CostWeights weights;
 };
 
