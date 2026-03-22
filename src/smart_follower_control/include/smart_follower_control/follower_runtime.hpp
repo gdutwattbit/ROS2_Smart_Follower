@@ -17,6 +17,9 @@ struct FollowerRuntimeConfig
   double target_distance{1.0};
   double theta_deadzone{0.03};
   double target_timeout{0.3};
+  double prediction_horizon_s{0.25};
+  double velocity_ema_alpha{0.70};
+  double max_target_speed_mps{1.50};
 
   double kp_r{0.8};
   double ki_r{0.0};
@@ -40,6 +43,11 @@ struct FollowerRuntimeSnapshot
   bool target_valid{false};
   bool target_seen{false};
   double target_age_s{-1.0};
+  double target_vx{0.0};
+  double target_vy{0.0};
+  double target_speed_mps{0.0};
+  double prediction_age_s{-1.0};
+  bool predicted_target_valid{false};
 };
 
 class FollowerRuntime
@@ -68,6 +76,7 @@ private:
   void configure_controllers();
   std::optional<TargetState> predict_target(const rclcpp::Time & now_time);
   double rate_limit(double target, double current, double accel_limit, double dt) const;
+  static void clamp_target_speed(TargetState & target, double max_speed_mps);
 
   FollowerRuntimeConfig config_;
   TargetState last_target_;

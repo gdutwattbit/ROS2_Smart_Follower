@@ -32,6 +32,9 @@ public:
     declare_parameter("target_distance", 1.0);
     declare_parameter("theta_deadzone", 0.03);
     declare_parameter("target_timeout", 0.3);
+    declare_parameter("prediction_horizon_s", 0.25);
+    declare_parameter("velocity_ema_alpha", 0.70);
+    declare_parameter("max_target_speed_mps", 1.50);
     declare_parameter("pid_r.kp", 0.8);
     declare_parameter("pid_r.ki", 0.0);
     declare_parameter("pid_r.kd", 0.1);
@@ -69,6 +72,9 @@ private:
     p_.runtime.target_distance = get_parameter("target_distance").as_double();
     p_.runtime.theta_deadzone = get_parameter("theta_deadzone").as_double();
     p_.runtime.target_timeout = get_parameter("target_timeout").as_double();
+    p_.runtime.prediction_horizon_s = get_parameter("prediction_horizon_s").as_double();
+    p_.runtime.velocity_ema_alpha = get_parameter("velocity_ema_alpha").as_double();
+    p_.runtime.max_target_speed_mps = get_parameter("max_target_speed_mps").as_double();
     p_.runtime.kp_r = get_parameter("pid_r.kp").as_double();
     p_.runtime.ki_r = get_parameter("pid_r.ki").as_double();
     p_.runtime.kd_r = get_parameter("pid_r.kd").as_double();
@@ -153,6 +159,9 @@ private:
     else if (name == "target_distance") target.runtime.target_distance = param.as_double();
     else if (name == "theta_deadzone") target.runtime.theta_deadzone = param.as_double();
     else if (name == "target_timeout") target.runtime.target_timeout = param.as_double();
+    else if (name == "prediction_horizon_s") target.runtime.prediction_horizon_s = param.as_double();
+    else if (name == "velocity_ema_alpha") target.runtime.velocity_ema_alpha = param.as_double();
+    else if (name == "max_target_speed_mps") target.runtime.max_target_speed_mps = param.as_double();
     else if (name == "pid_r.kp") target.runtime.kp_r = param.as_double();
     else if (name == "pid_r.ki") target.runtime.ki_r = param.as_double();
     else if (name == "pid_r.kd") target.runtime.kd_r = param.as_double();
@@ -176,6 +185,9 @@ private:
 
     candidate.runtime.control_rate = clamp_rate_hz(candidate.runtime.control_rate);
     candidate.runtime.target_timeout = clamp_non_negative(candidate.runtime.target_timeout);
+    candidate.runtime.prediction_horizon_s = clamp_non_negative(candidate.runtime.prediction_horizon_s);
+    candidate.runtime.velocity_ema_alpha = std::clamp(candidate.runtime.velocity_ema_alpha, 0.0, 1.0);
+    candidate.runtime.max_target_speed_mps = clamp_non_negative(candidate.runtime.max_target_speed_mps);
     candidate.runtime.theta_deadzone = clamp_non_negative(candidate.runtime.theta_deadzone);
     candidate.runtime.i_limit = clamp_non_negative(candidate.runtime.i_limit);
     candidate.runtime.v_max = clamp_non_negative(candidate.runtime.v_max);
@@ -189,12 +201,15 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "[%s] controller parameters hot-reloaded: pose=%s cmd=%s rate=%.2f timeout=%.2f",
+      "[%s] controller parameters hot-reloaded: pose=%s cmd=%s rate=%.2f timeout=%.2f horizon=%.2f alpha=%.2f vmax=%.2f",
       kRuntimeVersion,
       p_.person_pose_topic.c_str(),
       p_.cmd_vel_follow_topic.c_str(),
       p_.runtime.control_rate,
-      p_.runtime.target_timeout);
+      p_.runtime.target_timeout,
+      p_.runtime.prediction_horizon_s,
+      p_.runtime.velocity_ema_alpha,
+      p_.runtime.max_target_speed_mps);
 
     return make_ok_result();
   }
@@ -223,6 +238,11 @@ private:
     stat.add("target_valid", snapshot.target_valid);
     stat.add("target_seen", snapshot.target_seen);
     stat.add("target_age_s", snapshot.target_age_s);
+    stat.add("target_vx", snapshot.target_vx);
+    stat.add("target_vy", snapshot.target_vy);
+    stat.add("target_speed_mps", snapshot.target_speed_mps);
+    stat.add("prediction_age_s", snapshot.prediction_age_s);
+    stat.add("predicted_target_valid", snapshot.predicted_target_valid);
 
     int level = diagnostic_msgs::msg::DiagnosticStatus::OK;
     std::string message = "Follower control active";

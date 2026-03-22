@@ -10,6 +10,7 @@ void FollowerRuntime::set_config(const FollowerRuntimeConfig & config)
 {
   config_ = config;
   configure_controllers();
+  clamp_target_speed(last_target_, config_.max_target_speed_mps);
 }
 
 void FollowerRuntime::clear()
@@ -29,6 +30,8 @@ void FollowerRuntime::on_pose(const smart_follower_msgs::msg::PersonPoseArray & 
 {
   if (msg.lock_id < 0) {
     last_target_.valid = false;
+    last_target_.vx = 0.0;
+    last_target_.vy = 0.0;
     return;
   }
 
@@ -44,18 +47,33 @@ void FollowerRuntime::on_pose(const smart_follower_msgs::msg::PersonPoseArray & 
       continue;
     }
 
-    last_target_.x = person.position.x;
-    last_target_.y = person.position.y;
-    last_target_.vx = 0.0;
-    last_target_.vy = 0.0;
-    last_target_.stamp = rclcpp::Time(msg.header.stamp);
-    last_target_.valid = true;
+    TargetState next_target;
+    next_target.x = person.position.x;
+    next_target.y = person.position.y;
+    next_target.stamp = rclcpp::Time(msg.header.stamp);
+    next_target.valid = true;
+
+    if (last_target_.valid) {
+      const double dt = (next_target.stamp - last_target_.stamp).seconds();
+      if (dt > 1e-3 && dt <= config_.target_timeout) {
+        const double vx_meas = (next_target.x - last_target_.x) / dt;
+        const double vy_meas = (next_target.y - last_target_.y) / dt;
+        const double alpha = std::clamp(config_.velocity_ema_alpha, 0.0, 1.0);
+        next_target.vx = alpha * last_target_.vx + (1.0 - alpha) * vx_meas;
+        next_target.vy = alpha * last_target_.vy + (1.0 - alpha) * vy_meas;
+      }
+    }
+
+    clamp_target_speed(next_target, config_.max_target_speed_mps);
+    last_target_ = next_target;
     updated = true;
     break;
   }
 
   if (!updated) {
     last_target_.valid = false;
+    last_target_.vx = 0.0;
+    last_target_.vy = 0.0;
   }
 }
 
@@ -98,11 +116,19 @@ FollowerRuntimeSnapshot FollowerRuntime::snapshot(const rclcpp::Time & now_time)
   FollowerRuntimeSnapshot out;
   out.last_cmd_v = last_cmd_.linear.x;
   out.last_cmd_w = last_cmd_.angular.z;
-  out.target_valid = last_target_.valid;
   out.target_seen = last_target_.stamp.nanoseconds() > 0;
-  if (out.target_seen) {
-    out.target_age_s = std::max(0.0, (now_time - last_target_.stamp).seconds());
+  out.target_vx = last_target_.vx;
+  out.target_vy = last_target_.vy;
+  out.target_speed_mps = std::hypot(last_target_.vx, last_target_.vy);
+
+  if (!out.target_seen) {
+    return out;
   }
+
+  out.target_age_s = std::max(0.0, (now_time - last_target_.stamp).seconds());
+  out.target_valid = last_target_.valid && out.target_age_s <= config_.target_timeout;
+  out.prediction_age_s = std::min(out.target_age_s, std::max(0.0, config_.prediction_horizon_s));
+  out.predicted_target_valid = out.target_valid;
   return out;
 }
 
@@ -124,13 +150,29 @@ std::optional<FollowerRuntime::TargetState> FollowerRuntime::predict_target(cons
     return std::nullopt;
   }
 
-  return last_target_;
+  TargetState predicted = last_target_;
+  const double age_used = std::min(age, std::max(0.0, config_.prediction_horizon_s));
+  predicted.x += predicted.vx * age_used;
+  predicted.y += predicted.vy * age_used;
+  return predicted;
 }
 
 double FollowerRuntime::rate_limit(double target, double current, double accel_limit, double dt) const
 {
   const double delta_max = std::max(0.0, accel_limit) * std::max(1e-3, dt);
   return std::clamp(target, current - delta_max, current + delta_max);
+}
+
+void FollowerRuntime::clamp_target_speed(TargetState & target, double max_speed_mps)
+{
+  const double speed = std::hypot(target.vx, target.vy);
+  if (max_speed_mps <= 0.0 || speed <= max_speed_mps || speed <= 1e-9) {
+    return;
+  }
+
+  const double scale = max_speed_mps / speed;
+  target.vx *= scale;
+  target.vy *= scale;
 }
 
 }  // namespace smart_follower_control
