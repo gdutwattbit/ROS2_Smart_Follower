@@ -10,6 +10,7 @@
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <sensor_msgs/msg/range.hpp>
 
+#include "smart_follower_control/control_node_common.hpp"
 #include "smart_follower_control/constants.hpp"
 #include "smart_follower_control/lifecycle_utils.hpp"
 #include "smart_follower_control/ultrasonic_runtime.hpp"
@@ -55,7 +56,7 @@ private:
   void load_parameters()
   {
     p_.runtime.rate = get_parameter("rate").as_double();
-    p_.runtime.window_size = std::max<int>(1, static_cast<int>(get_parameter("window_size").as_int()));
+    p_.runtime.window_size = clamp_int_min(static_cast<int>(get_parameter("window_size").as_int()), 1);
     p_.runtime.max_range = get_parameter("max_range").as_double();
     p_.runtime.min_range = get_parameter("min_range").as_double();
     p_.runtime.left.trig_pin = get_parameter("left.trig_pin").as_int();
@@ -169,9 +170,9 @@ private:
       apply_parameter_override(candidate, param);
     }
 
-    candidate.runtime.rate = std::max(1.0, candidate.runtime.rate);
-    candidate.runtime.window_size = std::max(1, candidate.runtime.window_size);
-    candidate.runtime.min_range = std::max(0.0, candidate.runtime.min_range);
+    candidate.runtime.rate = clamp_rate_hz(candidate.runtime.rate);
+    candidate.runtime.window_size = clamp_int_min(candidate.runtime.window_size, 1);
+    candidate.runtime.min_range = clamp_non_negative(candidate.runtime.min_range);
     candidate.runtime.max_range = std::max(candidate.runtime.min_range, candidate.runtime.max_range);
 
     p_ = candidate;
@@ -184,10 +185,7 @@ private:
       log_hot_reload();
     }
 
-    rcl_interfaces::msg::SetParametersResult result;
-    result.successful = true;
-    result.reason = "ok";
-    return result;
+    return make_ok_result();
   }
 
   void publish_range(

@@ -11,6 +11,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/range.hpp>
 
+#include "smart_follower_control/control_node_common.hpp"
 #include "smart_follower_control/constants.hpp"
 #include "smart_follower_control/lifecycle_utils.hpp"
 #include "smart_follower_control/obstacle_runtime.hpp"
@@ -84,7 +85,7 @@ private:
     p_.runtime.depth_roi_width_ratio = get_parameter("depth_roi_width_ratio").as_double();
     p_.runtime.depth_roi_height_ratio = get_parameter("depth_roi_height_ratio").as_double();
     p_.runtime.depth_percentile = get_parameter("depth_percentile").as_double();
-    p_.runtime.depth_sample_stride = std::max<int>(1, static_cast<int>(get_parameter("depth_sample_stride").as_int()));
+    p_.runtime.depth_sample_stride = clamp_int_min(static_cast<int>(get_parameter("depth_sample_stride").as_int()), 1);
     p_.runtime.turn_speed = get_parameter("turn_speed").as_double();
     p_.runtime.slow_turn_speed = get_parameter("slow_turn_speed").as_double();
     p_.runtime.back_speed = get_parameter("back_speed").as_double();
@@ -93,11 +94,8 @@ private:
 
   void recreate_interfaces(bool preserve_activation)
   {
-    const bool was_active = preserve_activation && publisher_is_activated(avoid_pub_);
-    if (was_active) {
-      publish_zero();
-      deactivate_publisher(avoid_pub_);
-    }
+    const bool was_active = begin_recreate_lifecycle_publisher(
+      avoid_pub_, preserve_activation, [this]() { publish_zero(); });
 
     timer_.reset();
     left_sub_.reset();
@@ -139,9 +137,7 @@ private:
     avoid_pub_ = create_publisher<geometry_msgs::msg::Twist>(p_.cmd_vel_avoid_topic, 10);
     timer_ = create_wall_timer(hz_to_period(p_.rate), std::bind(&ObstacleAvoidanceNode::on_timer, this));
 
-    if (was_active) {
-      activate_publisher(avoid_pub_);
-    }
+    restore_lifecycle_publisher(avoid_pub_, was_active);
   }
 
   CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
@@ -212,12 +208,12 @@ private:
       apply_parameter_override(candidate, param);
     }
 
-    candidate.rate = std::max(1.0, candidate.rate);
-    candidate.runtime.a_brake = std::max(1e-3, candidate.runtime.a_brake);
+    candidate.rate = clamp_rate_hz(candidate.rate);
+    candidate.runtime.a_brake = clamp_positive(candidate.runtime.a_brake, 1e-3);
     candidate.runtime.depth_roi_width_ratio = std::clamp(candidate.runtime.depth_roi_width_ratio, 0.05, 1.0);
     candidate.runtime.depth_roi_height_ratio = std::clamp(candidate.runtime.depth_roi_height_ratio, 0.05, 1.0);
     candidate.runtime.depth_percentile = std::clamp(candidate.runtime.depth_percentile, 0.0, 1.0);
-    candidate.runtime.depth_sample_stride = std::max(1, candidate.runtime.depth_sample_stride);
+    candidate.runtime.depth_sample_stride = clamp_int_min(candidate.runtime.depth_sample_stride, 1);
 
     p_ = candidate;
     runtime_.set_config(p_.runtime);
@@ -234,10 +230,7 @@ private:
       p_.rate,
       p_.runtime.depth_sample_stride);
 
-    rcl_interfaces::msg::SetParametersResult result;
-    result.successful = true;
-    result.reason = "ok";
-    return result;
+    return make_ok_result();
   }
 
   void on_timer()

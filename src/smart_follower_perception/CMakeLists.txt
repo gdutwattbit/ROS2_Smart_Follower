@@ -56,6 +56,9 @@ add_library(smart_follower_perception_core
   src/lock_manager.cpp
   src/geometry_utils.cpp
   src/pipeline_utils.cpp
+  src/perception_params.cpp
+  src/perception_diagnostics.cpp
+  src/perception_pipeline.cpp
 )
 
 target_include_directories(smart_follower_perception_core PUBLIC
@@ -70,6 +73,7 @@ target_link_libraries(smart_follower_perception_core
 
 ament_target_dependencies(smart_follower_perception_core
   rclcpp
+  rclcpp_lifecycle
   sensor_msgs
   geometry_msgs
   std_msgs
@@ -77,6 +81,8 @@ ament_target_dependencies(smart_follower_perception_core
   tf2
   tf2_ros
   tf2_geometry_msgs
+  diagnostic_updater
+  diagnostic_msgs
   smart_follower_msgs
   cv_bridge
 )

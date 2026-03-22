@@ -52,6 +52,7 @@ set(common_deps
 )
 
 add_library(smart_follower_control_core
+  src/control_node_common.cpp
   src/arbiter_runtime.cpp
   src/follower_runtime.cpp
   src/obstacle_runtime.cpp
@@ -59,6 +60,8 @@ add_library(smart_follower_control_core
 )
 ament_target_dependencies(smart_follower_control_core
   rclcpp
+  rclcpp_lifecycle
+  lifecycle_msgs
   geometry_msgs
   sensor_msgs
   smart_follower_msgs

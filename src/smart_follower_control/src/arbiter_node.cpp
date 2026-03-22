@@ -12,6 +12,7 @@
 #include <smart_follower_msgs/msg/person_pose_array.hpp>
 
 #include "smart_follower_control/arbiter_runtime.hpp"
+#include "smart_follower_control/control_node_common.hpp"
 #include "smart_follower_control/constants.hpp"
 #include "smart_follower_control/lifecycle_utils.hpp"
 
@@ -93,11 +94,8 @@ private:
 
   void recreate_interfaces(bool preserve_activation)
   {
-    const bool was_active = preserve_activation && publisher_is_activated(cmd_pub_);
-    if (was_active) {
-      publish_zero();
-      deactivate_publisher(cmd_pub_);
-    }
+    const bool was_active = begin_recreate_lifecycle_publisher(
+      cmd_pub_, preserve_activation, [this]() { publish_zero(); });
 
     timer_.reset();
     pose_sub_.reset();
@@ -142,9 +140,7 @@ private:
 
     timer_ = create_wall_timer(hz_to_period(p_.publish_rate), std::bind(&ArbiterNode::on_timer, this));
 
-    if (was_active) {
-      activate_publisher(cmd_pub_);
-    }
+    restore_lifecycle_publisher(cmd_pub_, was_active);
   }
 
   CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
@@ -214,8 +210,9 @@ private:
       apply_parameter_override(candidate, param);
     }
 
-    candidate.publish_rate = std::max(1.0, candidate.publish_rate);
-    candidate.runtime.thresholds.lost_time_normal_max = std::max(0.0, candidate.runtime.thresholds.lost_time_normal_max);
+    candidate.publish_rate = clamp_rate_hz(candidate.publish_rate);
+    candidate.runtime.thresholds.lost_time_normal_max = clamp_non_negative(
+      candidate.runtime.thresholds.lost_time_normal_max);
     candidate.runtime.thresholds.lost_time_degraded_max = std::max(
       candidate.runtime.thresholds.lost_time_normal_max,
       candidate.runtime.thresholds.lost_time_degraded_max);
@@ -223,11 +220,12 @@ private:
       candidate.runtime.thresholds.lost_time_degraded_max,
       candidate.runtime.thresholds.lost_time_search_max);
     candidate.runtime.degraded_linear_scale = std::clamp(candidate.runtime.degraded_linear_scale, 0.0, 1.0);
-    candidate.runtime.avoid_enter_threshold = std::max(1, candidate.runtime.avoid_enter_threshold);
-    candidate.runtime.avoid_exit_threshold = std::max(1, candidate.runtime.avoid_exit_threshold);
-    candidate.runtime.avoid_exit_hysteresis_time = std::max(0.0, candidate.runtime.avoid_exit_hysteresis_time);
-    candidate.runtime.avoid_cmd_timeout = std::max(0.0, candidate.runtime.avoid_cmd_timeout);
-    candidate.runtime.avoid_nonzero_epsilon = std::max(0.0, candidate.runtime.avoid_nonzero_epsilon);
+    candidate.runtime.avoid_enter_threshold = clamp_int_min(candidate.runtime.avoid_enter_threshold, 1);
+    candidate.runtime.avoid_exit_threshold = clamp_int_min(candidate.runtime.avoid_exit_threshold, 1);
+    candidate.runtime.avoid_exit_hysteresis_time = clamp_non_negative(
+      candidate.runtime.avoid_exit_hysteresis_time);
+    candidate.runtime.avoid_cmd_timeout = clamp_non_negative(candidate.runtime.avoid_cmd_timeout);
+    candidate.runtime.avoid_nonzero_epsilon = clamp_non_negative(candidate.runtime.avoid_nonzero_epsilon);
 
     p_ = candidate;
     runtime_.set_config(p_.runtime);
@@ -243,10 +241,7 @@ private:
       p_.cmd_vel_topic.c_str(),
       p_.publish_rate);
 
-    rcl_interfaces::msg::SetParametersResult result;
-    result.successful = true;
-    result.reason = "ok";
-    return result;
+    return make_ok_result();
   }
 
   void on_timer()

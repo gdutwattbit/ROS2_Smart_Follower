@@ -10,6 +10,7 @@
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <smart_follower_msgs/msg/person_pose_array.hpp>
 
+#include "smart_follower_control/control_node_common.hpp"
 #include "smart_follower_control/constants.hpp"
 #include "smart_follower_control/follower_runtime.hpp"
 #include "smart_follower_control/lifecycle_utils.hpp"
@@ -85,11 +86,8 @@ private:
 
   void recreate_interfaces(bool preserve_activation)
   {
-    const bool was_active = preserve_activation && publisher_is_activated(cmd_pub_);
-    if (was_active) {
-      publish_zero();
-      deactivate_publisher(cmd_pub_);
-    }
+    const bool was_active = begin_recreate_lifecycle_publisher(
+      cmd_pub_, preserve_activation, [this]() { publish_zero(); });
 
     timer_.reset();
     pose_sub_.reset();
@@ -105,11 +103,10 @@ private:
         }
       });
 
-    timer_ = create_wall_timer(hz_to_period(p_.runtime.control_rate), std::bind(&FollowerControllerNode::on_timer, this));
+    timer_ = create_wall_timer(
+      hz_to_period(p_.runtime.control_rate), std::bind(&FollowerControllerNode::on_timer, this));
 
-    if (was_active) {
-      activate_publisher(cmd_pub_);
-    }
+    restore_lifecycle_publisher(cmd_pub_, was_active);
   }
 
   CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
@@ -177,14 +174,14 @@ private:
       apply_parameter_override(candidate, param);
     }
 
-    candidate.runtime.control_rate = std::max(1.0, candidate.runtime.control_rate);
-    candidate.runtime.target_timeout = std::max(0.0, candidate.runtime.target_timeout);
-    candidate.runtime.theta_deadzone = std::max(0.0, candidate.runtime.theta_deadzone);
-    candidate.runtime.i_limit = std::max(0.0, candidate.runtime.i_limit);
-    candidate.runtime.v_max = std::max(0.0, candidate.runtime.v_max);
-    candidate.runtime.w_max = std::max(0.0, candidate.runtime.w_max);
-    candidate.runtime.dv_max = std::max(0.0, candidate.runtime.dv_max);
-    candidate.runtime.dw_max = std::max(0.0, candidate.runtime.dw_max);
+    candidate.runtime.control_rate = clamp_rate_hz(candidate.runtime.control_rate);
+    candidate.runtime.target_timeout = clamp_non_negative(candidate.runtime.target_timeout);
+    candidate.runtime.theta_deadzone = clamp_non_negative(candidate.runtime.theta_deadzone);
+    candidate.runtime.i_limit = clamp_non_negative(candidate.runtime.i_limit);
+    candidate.runtime.v_max = clamp_non_negative(candidate.runtime.v_max);
+    candidate.runtime.w_max = clamp_non_negative(candidate.runtime.w_max);
+    candidate.runtime.dv_max = clamp_non_negative(candidate.runtime.dv_max);
+    candidate.runtime.dw_max = clamp_non_negative(candidate.runtime.dw_max);
 
     p_ = candidate;
     runtime_.set_config(p_.runtime);
@@ -199,10 +196,7 @@ private:
       p_.runtime.control_rate,
       p_.runtime.target_timeout);
 
-    rcl_interfaces::msg::SetParametersResult result;
-    result.successful = true;
-    result.reason = "ok";
-    return result;
+    return make_ok_result();
   }
 
   void on_timer()
