@@ -18,6 +18,13 @@ namespace smart_follower_perception
 
 std::string resolve_model_path(const std::string & input_path);
 
+struct OrtRuntimeConfig
+{
+  int intra_op_num_threads{1};
+  int inter_op_num_threads{1};
+  bool execution_mode_parallel{false};
+};
+
 class YoloDetector
 {
 public:
@@ -27,7 +34,13 @@ public:
     float conf{0.0F};
   };
 
-  void configure(const std::string & model_path, int input_w, int input_h, int person_class_id, float conf_threshold);
+  void configure(
+    const std::string & model_path,
+    int input_w,
+    int input_h,
+    int person_class_id,
+    float conf_threshold,
+    const OrtRuntimeConfig & ort_config);
   bool ready() const;
   std::vector<Result> detect(const cv::Mat & bgr);
 
@@ -40,6 +53,7 @@ private:
   int input_h_{640};
   int person_class_id_{0};
   float conf_threshold_{0.25F};
+  OrtRuntimeConfig ort_config_{};
 #ifdef HAVE_ONNXRUNTIME
   std::unique_ptr<Ort::Env> env_;
   Ort::SessionOptions session_options_;
@@ -52,7 +66,11 @@ private:
 class ReidExtractor
 {
 public:
-  void configure(const std::string & model_path, int input_w, int input_h);
+  void configure(
+    const std::string & model_path,
+    int input_w,
+    int input_h,
+    const OrtRuntimeConfig & ort_config);
   bool ready() const;
   bool consume_output_dim_error(std::string & msg);
   std::array<float, kFeatureDim> extract(const cv::Mat & bgr, const cv::Rect2f & bbox, bool & valid);
@@ -65,6 +83,7 @@ private:
   int input_h_{256};
   bool output_dim_mismatch_{false};
   std::string output_dim_error_msg_;
+  OrtRuntimeConfig ort_config_{};
 #ifdef HAVE_ONNXRUNTIME
   std::unique_ptr<Ort::Env> env_;
   Ort::SessionOptions session_options_;

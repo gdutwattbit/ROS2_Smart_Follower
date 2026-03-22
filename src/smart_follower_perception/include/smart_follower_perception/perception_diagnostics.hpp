@@ -23,6 +23,9 @@ struct PerceptionPipelineProfile
   double last_recover_ms{0.0};
   double last_tracking_ms{0.0};
   double last_lock_ms{0.0};
+  double last_tf_lookup_ms{0.0};
+  double last_tf_transform_ms{0.0};
+  double last_message_fill_ms{0.0};
   double last_message_ms{0.0};
   double last_publish_ms{0.0};
   double last_total_ms{0.0};
@@ -42,6 +45,9 @@ struct PerceptionPipelineProfile
   double sum_recover_ms{0.0};
   double sum_tracking_ms{0.0};
   double sum_lock_ms{0.0};
+  double sum_tf_lookup_ms{0.0};
+  double sum_tf_transform_ms{0.0};
+  double sum_message_fill_ms{0.0};
   double sum_message_ms{0.0};
   double sum_publish_ms{0.0};
   double sum_total_ms{0.0};
@@ -60,6 +66,9 @@ struct PerceptionPipelineProfile
     double recover_ms,
     double tracking_ms,
     double lock_ms,
+    double tf_lookup_ms,
+    double tf_transform_ms,
+    double message_fill_ms,
     double message_ms,
     double publish_ms,
     double total_ms,
@@ -75,6 +84,9 @@ struct PerceptionPipelineProfile
     last_recover_ms = recover_ms;
     last_tracking_ms = tracking_ms;
     last_lock_ms = lock_ms;
+    last_tf_lookup_ms = tf_lookup_ms;
+    last_tf_transform_ms = tf_transform_ms;
+    last_message_fill_ms = message_fill_ms;
     last_message_ms = message_ms;
     last_publish_ms = publish_ms;
     last_total_ms = total_ms;
@@ -97,6 +109,9 @@ struct PerceptionPipelineProfile
     sum_recover_ms += recover_ms;
     sum_tracking_ms += tracking_ms;
     sum_lock_ms += lock_ms;
+    sum_tf_lookup_ms += tf_lookup_ms;
+    sum_tf_transform_ms += tf_transform_ms;
+    sum_message_fill_ms += message_fill_ms;
     sum_message_ms += message_ms;
     sum_publish_ms += publish_ms;
     sum_total_ms += total_ms;
@@ -224,6 +239,9 @@ struct PerceptionDiagnostics
     stat.add("profile_last_recover_ms", profile.last_recover_ms);
     stat.add("profile_last_tracking_ms", profile.last_tracking_ms);
     stat.add("profile_last_lock_ms", profile.last_lock_ms);
+    stat.add("profile_last_tf_lookup_ms", profile.last_tf_lookup_ms);
+    stat.add("profile_last_tf_transform_ms", profile.last_tf_transform_ms);
+    stat.add("profile_last_message_fill_ms", profile.last_message_fill_ms);
     stat.add("profile_last_message_ms", profile.last_message_ms);
     stat.add("profile_last_publish_ms", profile.last_publish_ms);
     stat.add("profile_last_total_ms", profile.last_total_ms);
@@ -235,6 +253,9 @@ struct PerceptionDiagnostics
     stat.add("profile_avg_recover_ms", profile.avg(profile.sum_recover_ms));
     stat.add("profile_avg_tracking_ms", profile.avg(profile.sum_tracking_ms));
     stat.add("profile_avg_lock_ms", profile.avg(profile.sum_lock_ms));
+    stat.add("profile_avg_tf_lookup_ms", profile.avg(profile.sum_tf_lookup_ms));
+    stat.add("profile_avg_tf_transform_ms", profile.avg(profile.sum_tf_transform_ms));
+    stat.add("profile_avg_message_fill_ms", profile.avg(profile.sum_message_fill_ms));
     stat.add("profile_avg_message_ms", profile.avg(profile.sum_message_ms));
     stat.add("profile_avg_publish_ms", profile.avg(profile.sum_publish_ms));
     stat.add("profile_avg_total_ms", profile.avg(profile.sum_total_ms));

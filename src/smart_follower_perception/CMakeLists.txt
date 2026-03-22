@@ -55,6 +55,7 @@ add_library(smart_follower_perception_core
   src/tracker.cpp
   src/lock_manager.cpp
   src/geometry_utils.cpp
+  src/pipeline_utils.cpp
 )
 
 target_include_directories(smart_follower_perception_core PUBLIC
@@ -77,6 +78,7 @@ ament_target_dependencies(smart_follower_perception_core
   tf2_ros
   tf2_geometry_msgs
   smart_follower_msgs
+  cv_bridge
 )
 
 if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
@@ -123,6 +125,7 @@ ament_target_dependencies(perception_node
   diagnostic_updater
   diagnostic_msgs
   smart_follower_msgs
+  cv_bridge
 )
 
 install(TARGETS perception_node smart_follower_perception_core

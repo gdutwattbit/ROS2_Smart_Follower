@@ -8,18 +8,26 @@
     base_frame: base_footprint
 
     yolo:
-      model_path: models/yolo26n.onnx
+      model_path: models/yolo26n_static_480x640_simplify_e2e.onnx
       input_w: 640
-      input_h: 640
+      input_h: 480
       person_class_id: 0
       conf_threshold: 0.25
+      ort:
+        intra_op_num_threads: 3
+        inter_op_num_threads: 1
+        execution_mode: sequential
 
     reid:
-      model_path: models/reid_resnet50_2048.onnx
+      model_path: models/osnet_x0_5_512.onnx
       input_w: 128
       input_h: 256
       ema_alpha: 0.2
       recover_threshold: 0.70
+      ort:
+        intra_op_num_threads: 1
+        inter_op_num_threads: 1
+        execution_mode: sequential
 
     sync_slop: 0.04
     process_every_n_frames: 3

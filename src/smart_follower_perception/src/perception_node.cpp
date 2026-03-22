@@ -1,15 +1,14 @@
 #include <algorithm>
-#include <cmath>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
-#include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
-#include <utility>
+#include <thread>
 #include <vector>
 
-#include <cv_bridge/cv_bridge.h>
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <image_geometry/pinhole_camera_model.h>
 #include <lifecycle_msgs/msg/state.hpp>
@@ -32,6 +31,7 @@
 #include "smart_follower_perception/lock_manager.hpp"
 #include "smart_follower_perception/perception_diagnostics.hpp"
 #include "smart_follower_perception/perception_params.hpp"
+#include "smart_follower_perception/pipeline_utils.hpp"
 #include "smart_follower_perception/runtime.hpp"
 #include "smart_follower_perception/tracker.hpp"
 
@@ -95,8 +95,13 @@ private:
       params_.yolo_input_w,
       params_.yolo_input_h,
       params_.person_class_id,
-      params_.yolo_conf_threshold);
-    reid_.configure(params_.reid_model_path, params_.reid_input_w, params_.reid_input_h);
+      params_.yolo_conf_threshold,
+      params_.yolo_ort);
+    reid_.configure(
+      params_.reid_model_path,
+      params_.reid_input_w,
+      params_.reid_input_h,
+      params_.reid_ort);
   }
 
   void recreate_interfaces(bool preserve_activation)
@@ -161,14 +166,14 @@ private:
 
   void try_process_cached_frames()
   {
-    std::unique_lock<std::mutex> process_lock(process_mutex_, std::try_to_lock);
-    if (!process_lock.owns_lock()) {
+    std::unique_lock<std::mutex> dispatch_lock(process_mutex_, std::try_to_lock);
+    if (!dispatch_lock.owns_lock()) {
       return;
     }
 
     FrameSynchronizer::Triplet triplet;
     while (frame_sync_.pop_next(triplet)) {
-      process_synchronized_frame(triplet.color, triplet.depth, triplet.info);
+      enqueue_synchronized_frame(SynchronizedFrame{triplet.color, triplet.depth, triplet.info});
     }
   }
 
@@ -218,63 +223,16 @@ private:
     }
   }
 
-  smart_follower_msgs::msg::TrackedPerson to_msg(const Track & track, const std_msgs::msg::Header & header)
-  {
-    smart_follower_msgs::msg::TrackedPerson msg;
-    msg.track_id = track.id;
-    msg.track_state = track.state;
-    msg.confidence = track.confidence;
-    msg.bbox.x_offset = static_cast<uint32_t>(std::max(0.0F, track.bbox.x));
-    msg.bbox.y_offset = static_cast<uint32_t>(std::max(0.0F, track.bbox.y));
-    msg.bbox.width = static_cast<uint32_t>(std::max(0.0F, track.bbox.width));
-    msg.bbox.height = static_cast<uint32_t>(std::max(0.0F, track.bbox.height));
-
-    auto position = pixel_to_base_point(
-      track.bbox,
-      track.depth_m,
-      header,
-      camera_model_,
-      tf_buffer_,
-      params_.base_frame,
-      params_.depth_min_m,
-      params_.depth_max_m,
-      get_logger(),
-      *get_clock());
-    if (position.has_value()) {
-      msg.position = *position;
-    } else {
-      msg.position.x = std::numeric_limits<double>::quiet_NaN();
-      msg.position.y = std::numeric_limits<double>::quiet_NaN();
-      msg.position.z = std::numeric_limits<double>::quiet_NaN();
-    }
-
-    msg.velocity.x = 0.0;
-    msg.velocity.y = 0.0;
-    msg.velocity.z = 0.0;
-    msg.depth_m = track.depth_m;
-    if (track.feature_valid) {
-      for (int i = 0; i < kFeatureDim; ++i) {
-        msg.appearance_feature[i] = track.ema_feature[i];
-      }
-    }
-    msg.last_seen = track.last_seen;
-    return msg;
-  }
-
-  void process_synchronized_frame(
-    const Image::SharedPtr & color_msg,
-    const Image::SharedPtr & depth_msg,
-    const CameraInfo::SharedPtr & info_msg)
+  void enqueue_synchronized_frame(const SynchronizedFrame & synced_frame)
   {
     if (this->get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
       return;
     }
-    if (!color_msg || !depth_msg || !info_msg) {
+    if (!synced_frame.color || !synced_frame.depth || !synced_frame.info) {
       return;
     }
 
-    const rclcpp::Time stamp(color_msg->header.stamp);
-    if (std::abs((stamp - rclcpp::Time(depth_msg->header.stamp)).seconds()) > params_.sync_slop) {
+    if (!is_sync_pair_within_slop(synced_frame.color, synced_frame.depth, params_.sync_slop)) {
       stats_.dropped_sync_frames_extra += 1;
       return;
     }
@@ -296,121 +254,204 @@ private:
       return;
     }
 
+    scheduled_frame_counter_ += 1;
+    const bool run_detect = (scheduled_frame_counter_ % params_.detect_every_n_frames == 0);
+    RCLCPP_INFO_THROTTLE(
+      get_logger(),
+      *get_clock(),
+      2000,
+      "[%s] sync callback synced=%zu synced_frame=%d scheduled=%d processed=%d run_pipeline=1 run_detect=%d",
+      kRuntimeVersion,
+      stats_.synced_callback_count,
+      stats_.synced_frame_counter,
+      scheduled_frame_counter_,
+      stats_.processed_frame_counter,
+      run_detect ? 1 : 0);
+
+    std::lock_guard<std::mutex> worker_lock(worker_mutex_);
+    if (!worker_running_) {
+      return;
+    }
+
+    DetectionWorkItem item;
+    item.frame = synced_frame;
+    item.run_detect = run_detect;
+    pending_work_ = std::move(item);
+    worker_cv_.notify_one();
+  }
+
+  void start_detection_worker()
+  {
+    std::lock_guard<std::mutex> worker_lock(worker_mutex_);
+    if (worker_running_) {
+      return;
+    }
+
+    worker_running_ = true;
+    pending_work_.reset();
+    detection_worker_ = std::thread(&PerceptionNode::detection_worker_loop, this);
+  }
+
+  void stop_detection_worker()
+  {
+    {
+      std::lock_guard<std::mutex> worker_lock(worker_mutex_);
+      if (!worker_running_ && !detection_worker_.joinable()) {
+        pending_work_.reset();
+      } else {
+        worker_running_ = false;
+        pending_work_.reset();
+      }
+    }
+    worker_cv_.notify_all();
+    if (detection_worker_.joinable()) {
+      detection_worker_.join();
+    }
+  }
+
+  void clear_async_state()
+  {
+    {
+      std::lock_guard<std::mutex> worker_lock(worker_mutex_);
+      pending_work_.reset();
+    }
+    {
+      std::lock_guard<std::mutex> result_lock(result_mutex_);
+      latest_result_.reset();
+    }
+    scheduled_frame_counter_ = 0;
+  }
+
+  void detection_worker_loop()
+  {
+    while (true) {
+      DetectionWorkItem item;
+      {
+        std::unique_lock<std::mutex> worker_lock(worker_mutex_);
+        worker_cv_.wait(worker_lock, [this]() {
+          return !worker_running_ || pending_work_.has_value();
+        });
+
+        if (!worker_running_ && !pending_work_.has_value()) {
+          break;
+        }
+
+        item = std::move(*pending_work_);
+        pending_work_.reset();
+      }
+
+      DetectionWorkResult result;
+      const bool ok = run_detection_work_item(
+        item,
+        yolo_,
+        reid_,
+        params_.depth_min_m,
+        params_.depth_max_m,
+        result,
+        get_logger(),
+        *get_clock());
+      if (!ok) {
+        continue;
+      }
+
+      std::lock_guard<std::mutex> result_lock(result_mutex_);
+      latest_result_ = std::move(result);
+    }
+  }
+
+  void on_worker_result_timer()
+  {
+    if (this->get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+      return;
+    }
+
+    std::optional<DetectionWorkResult> result;
+    {
+      std::lock_guard<std::mutex> result_lock(result_mutex_);
+      if (!latest_result_.has_value()) {
+        return;
+      }
+      result = std::move(latest_result_);
+      latest_result_.reset();
+    }
+
+    process_detection_result(std::move(*result));
+  }
+
+  void process_detection_result(DetectionWorkResult result)
+  {
+    if (!result.camera_info) {
+      return;
+    }
+
     using Clock = std::chrono::steady_clock;
     const auto elapsed_ms = [](const Clock::time_point & begin, const Clock::time_point & end) {
       return std::chrono::duration<double, std::milli>(end - begin).count();
     };
 
-    const auto frame_begin = Clock::now();
-    camera_model_.fromCameraInfo(*info_msg);
-    const auto after_camera_info = Clock::now();
-
-    cv::Mat color;
-    cv::Mat depth;
-    try {
-      color = cv_bridge::toCvShare(color_msg, "bgr8")->image;
-      if (depth_msg->encoding == "16UC1" || depth_msg->encoding == "32FC1") {
-        depth = cv_bridge::toCvShare(depth_msg, depth_msg->encoding)->image;
-      } else {
-        depth = cv_bridge::toCvShare(depth_msg)->image;
-      }
-    } catch (const cv_bridge::Exception & ex) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "cv_bridge error: %s", ex.what());
-      return;
-    }
-    const auto after_cv_bridge = Clock::now();
-
     stats_.processed_frame_counter += 1;
-    const bool run_detect = (stats_.processed_frame_counter % params_.detect_every_n_frames == 0);
-    RCLCPP_INFO_THROTTLE(
-      get_logger(),
-      *get_clock(),
-      2000,
-      "[%s] sync callback synced=%zu synced_frame=%d processed=%d run_pipeline=1 run_detect=%d",
-      kRuntimeVersion,
-      stats_.synced_callback_count,
-      stats_.synced_frame_counter,
-      stats_.processed_frame_counter,
-      run_detect ? 1 : 0);
 
-    double yolo_ms = 0.0;
-    double depth_ms = 0.0;
-    double reid_ms = 0.0;
+    if (!result.reid_dim_error.empty()) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "%s", result.reid_dim_error.c_str());
+    }
+
+    const auto camera_info_begin = Clock::now();
+    camera_model_.fromCameraInfo(*result.camera_info);
+    const auto camera_info_end = Clock::now();
+    const double camera_info_ms = elapsed_ms(camera_info_begin, camera_info_end);
+
     double recover_ms = 0.0;
-    std::vector<Detection> detections;
-    if (run_detect) {
-      const auto yolo_begin = Clock::now();
-      auto detector_results = yolo_.detect(color);
-      const auto yolo_end = Clock::now();
-      yolo_ms = elapsed_ms(yolo_begin, yolo_end);
-
-      detections.reserve(detector_results.size());
-      for (const auto & det : detector_results) {
-        Detection detection;
-        detection.bbox = det.bbox;
-        detection.confidence = det.conf;
-        const int cx = static_cast<int>(detection.bbox.x + detection.bbox.width * 0.5F);
-        const int cy = static_cast<int>(detection.bbox.y + detection.bbox.height * 0.5F);
-
-        const auto depth_begin = Clock::now();
-        detection.depth_m = sample_depth_m(depth, cx, cy, params_.depth_min_m, params_.depth_max_m);
-        const auto depth_end = Clock::now();
-        depth_ms += elapsed_ms(depth_begin, depth_end);
-
-        bool feature_valid = false;
-        const auto reid_begin = Clock::now();
-        detection.feature = reid_.extract(color, detection.bbox, feature_valid);
-        const auto reid_end = Clock::now();
-        reid_ms += elapsed_ms(reid_begin, reid_end);
-        detection.feature_valid = feature_valid;
-
-        if (
-          lock_manager_.lock_state() == smart_follower_msgs::msg::PersonPoseArray::LOST &&
-          feature_valid)
-        {
-          const auto recover_begin = Clock::now();
-          auto recovered = tracker_.try_recover_lock_from_memory(
-            detection,
-            stamp,
-            lock_manager_.lock_id());
-          const auto recover_end = Clock::now();
-          recover_ms += elapsed_ms(recover_begin, recover_end);
-          if (recovered.has_value()) {
-            detection.recovered_track_id = *recovered;
-          }
+    for (auto & detection : result.detections) {
+      if (
+        lock_manager_.lock_state() == smart_follower_msgs::msg::PersonPoseArray::LOST &&
+        detection.feature_valid)
+      {
+        const auto recover_begin = Clock::now();
+        auto recovered = tracker_.try_recover_lock_from_memory(
+          detection,
+          result.stamp,
+          lock_manager_.lock_id());
+        const auto recover_end = Clock::now();
+        recover_ms += elapsed_ms(recover_begin, recover_end);
+        if (recovered.has_value()) {
+          detection.recovered_track_id = *recovered;
         }
-
-        detections.push_back(detection);
       }
     }
 
-    std::string reid_dim_error;
-    if (reid_.consume_output_dim_error(reid_dim_error)) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "%s", reid_dim_error.c_str());
-    }
+    const std::size_t detection_count = result.detections.size();
 
     const auto tracking_begin = Clock::now();
-    auto track_result = tracker_.run_tracking(detections, color.size(), stamp, run_detect);
+    auto track_result = tracker_.run_tracking(
+      std::move(result.detections),
+      result.image_size,
+      result.stamp,
+      result.run_detect);
     const auto tracking_end = Clock::now();
     if (track_result.recovered_track_id.has_value()) {
       lock_manager_.set_lock_id(*track_result.recovered_track_id);
     }
 
     const auto lock_begin = Clock::now();
-    lock_manager_.update(tracker_.tracks(), color.size(), stamp);
+    lock_manager_.update(tracker_.tracks(), result.image_size, result.stamp);
     const auto lock_end = Clock::now();
 
     const auto message_begin = Clock::now();
-    smart_follower_msgs::msg::PersonPoseArray out;
-    out.header = color_msg->header;
-    out.header.frame_id = params_.base_frame;
-    out.lock_id = lock_manager_.lock_id();
-    out.lock_state = lock_manager_.lock_state();
-    out.persons.reserve(tracker_.tracks().size());
-    for (const auto & kv : tracker_.tracks()) {
-      out.persons.push_back(to_msg(kv.second, depth_msg->header));
-    }
+    auto pose_build = build_person_pose_array(
+      tracker_.tracks(),
+      result.color_header,
+      result.depth_header,
+      lock_manager_.lock_id(),
+      lock_manager_.lock_state(),
+      camera_model_,
+      tf_buffer_,
+      params_.base_frame,
+      params_.depth_min_m,
+      params_.depth_max_m,
+      get_logger(),
+      *get_clock());
     const auto message_end = Clock::now();
+    auto & out = pose_build.msg;
 
     double publish_ms = 0.0;
     if (person_pub_ && person_pub_->is_activated()) {
@@ -430,40 +471,41 @@ private:
         out.persons.size(),
         out.lock_id,
         out.lock_state,
-        detections.size());
+        detection_count);
     }
 
     const auto frame_end = Clock::now();
-    const double camera_info_ms = elapsed_ms(frame_begin, after_camera_info);
-    const double cv_bridge_ms = elapsed_ms(after_camera_info, after_cv_bridge);
     const double tracking_ms = elapsed_ms(tracking_begin, tracking_end);
     const double lock_ms = elapsed_ms(lock_begin, lock_end);
     const double message_ms = elapsed_ms(message_begin, message_end);
-    const double total_ms = elapsed_ms(frame_begin, frame_end);
+    const double total_ms = elapsed_ms(result.processing_begin, frame_end);
 
-    stats_.last_detection_count = detections.size();
+    stats_.last_detection_count = detection_count;
     stats_.last_infer_ms = total_ms;
     stats_.profile.observe(
       camera_info_ms,
-      cv_bridge_ms,
-      yolo_ms,
-      depth_ms,
-      reid_ms,
+      result.cv_bridge_ms,
+      result.yolo_ms,
+      result.depth_ms,
+      result.reid_ms,
       recover_ms,
       tracking_ms,
       lock_ms,
+      pose_build.stats.tf_lookup_ms,
+      pose_build.stats.tf_transform_ms,
+      pose_build.stats.message_fill_ms,
       message_ms,
       publish_ms,
       total_ms,
-      run_detect,
-      detections.size(),
+      result.run_detect,
+      detection_count,
       out.persons.size());
 
     RCLCPP_INFO_THROTTLE(
       get_logger(),
       *get_clock(),
       5000,
-      "[%s] profile avg_ms total=%.2f camera_info=%.2f cv_bridge=%.2f yolo=%.2f depth=%.2f reid=%.2f recover=%.2f tracking=%.2f lock=%.2f message=%.2f publish=%.2f | last_ms total=%.2f yolo=%.2f reid=%.2f message=%.2f det=%zu tracks=%zu run_detect=%d",
+      "[%s] profile avg_ms total=%.2f camera_info=%.2f cv_bridge=%.2f yolo=%.2f depth=%.2f reid=%.2f recover=%.2f tracking=%.2f lock=%.2f tf_lookup=%.2f tf_transform=%.2f msg_fill=%.2f message=%.2f publish=%.2f | last_ms total=%.2f yolo=%.2f reid=%.2f tf_lookup=%.2f tf_transform=%.2f message=%.2f det=%zu tracks=%zu run_detect=%d",
       kRuntimeVersion,
       stats_.profile.avg(stats_.profile.sum_total_ms),
       stats_.profile.avg(stats_.profile.sum_camera_info_ms),
@@ -474,15 +516,20 @@ private:
       stats_.profile.avg(stats_.profile.sum_recover_ms),
       stats_.profile.avg(stats_.profile.sum_tracking_ms),
       stats_.profile.avg(stats_.profile.sum_lock_ms),
+      stats_.profile.avg(stats_.profile.sum_tf_lookup_ms),
+      stats_.profile.avg(stats_.profile.sum_tf_transform_ms),
+      stats_.profile.avg(stats_.profile.sum_message_fill_ms),
       stats_.profile.avg(stats_.profile.sum_message_ms),
       stats_.profile.avg(stats_.profile.sum_publish_ms),
       stats_.profile.last_total_ms,
       stats_.profile.last_yolo_ms,
       stats_.profile.last_reid_ms,
+      stats_.profile.last_tf_lookup_ms,
+      stats_.profile.last_tf_transform_ms,
       stats_.profile.last_message_ms,
-      detections.size(),
+      detection_count,
       out.persons.size(),
-      run_detect ? 1 : 0);
+      result.run_detect ? 1 : 0);
 
     diagnostics_.force_update();
   }
@@ -507,14 +554,28 @@ private:
     for (const auto & parameter : parameters) {
       ::smart_follower_perception::apply_parameter_override(candidate, parameter);
     }
+    const bool was_active = this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
+    if (was_active && result_timer_) {
+      result_timer_->cancel();
+    }
+    stop_detection_worker();
+    clear_async_state();
+
     params_ = candidate;
     configure_modules_from_params();
     configure_models();
-    recreate_interfaces(this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+    recreate_interfaces(was_active);
+
+    if (was_active) {
+      start_detection_worker();
+      if (result_timer_) {
+        result_timer_->reset();
+      }
+    }
 
     RCLCPP_INFO(
       get_logger(),
-      "[%s] parameters hot-reloaded: color=%s depth=%s info=%s person_pose=%s yolo=%s reid=%s sync_slop=%.3f",
+      "[%s] parameters hot-reloaded: color=%s depth=%s info=%s person_pose=%s yolo=%s reid=%s sync_slop=%.3f yolo_ort=(intra=%d inter=%d mode=%s) reid_ort=(intra=%d inter=%d mode=%s)",
       kRuntimeVersion,
       params_.color_topic.c_str(),
       params_.depth_topic.c_str(),
@@ -522,7 +583,13 @@ private:
       params_.person_pose_topic.c_str(),
       params_.yolo_model_path.c_str(),
       params_.reid_model_path.c_str(),
-      params_.sync_slop);
+      params_.sync_slop,
+      params_.yolo_ort.intra_op_num_threads,
+      params_.yolo_ort.inter_op_num_threads,
+      params_.yolo_ort.execution_mode_parallel ? "parallel" : "sequential",
+      params_.reid_ort.intra_op_num_threads,
+      params_.reid_ort.inter_op_num_threads,
+      params_.reid_ort.execution_mode_parallel ? "parallel" : "sequential");
 
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = true;
@@ -536,6 +603,14 @@ private:
     configure_modules_from_params();
     configure_models();
     recreate_interfaces(false);
+    clear_async_state();
+
+    if (!result_timer_) {
+      result_timer_ = this->create_wall_timer(
+        std::chrono::milliseconds(10),
+        std::bind(&PerceptionNode::on_worker_result_timer, this));
+      result_timer_->cancel();
+    }
 
     diagnostics_.setHardwareID("smart_follower_perception");
     if (!diagnostics_registered_) {
@@ -550,7 +625,7 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "[%s] Configured perception node. YOLO ready=%d ReID ready=%d yolo_input=%dx%d reid_input=%dx%d process_every_n_frames=%d detect_every_n_frames=%d",
+      "[%s] Configured perception node. YOLO ready=%d ReID ready=%d yolo_input=%dx%d reid_input=%dx%d process_every_n_frames=%d detect_every_n_frames=%d yolo_ort=(intra=%d inter=%d mode=%s) reid_ort=(intra=%d inter=%d mode=%s)",
       kRuntimeVersion,
       yolo_.ready(),
       reid_.ready(),
@@ -559,7 +634,13 @@ private:
       params_.reid_input_w,
       params_.reid_input_h,
       params_.process_every_n_frames,
-      params_.detect_every_n_frames);
+      params_.detect_every_n_frames,
+      params_.yolo_ort.intra_op_num_threads,
+      params_.yolo_ort.inter_op_num_threads,
+      params_.yolo_ort.execution_mode_parallel ? "parallel" : "sequential",
+      params_.reid_ort.intra_op_num_threads,
+      params_.reid_ort.inter_op_num_threads,
+      params_.reid_ort.execution_mode_parallel ? "parallel" : "sequential");
     RCLCPP_INFO(
       get_logger(),
       "[%s] input topics color=%s depth=%s info=%s person_pose=%s sync_slop=%.3f cache_size=%d",
@@ -578,11 +659,21 @@ private:
     if (person_pub_) {
       person_pub_->on_activate();
     }
+    clear_async_state();
+    start_detection_worker();
+    if (result_timer_) {
+      result_timer_->reset();
+    }
     return CallbackReturn::SUCCESS;
   }
 
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override
   {
+    if (result_timer_) {
+      result_timer_->cancel();
+    }
+    stop_detection_worker();
+    clear_async_state();
     if (person_pub_) {
       person_pub_->on_deactivate();
     }
@@ -591,6 +682,12 @@ private:
 
   CallbackReturn on_cleanup(const rclcpp_lifecycle::State &) override
   {
+    if (result_timer_) {
+      result_timer_->cancel();
+      result_timer_.reset();
+    }
+    stop_detection_worker();
+    clear_async_state();
     color_sub_.reset();
     depth_sub_.reset();
     info_sub_.reset();
@@ -624,6 +721,15 @@ private:
 
   bool diagnostics_registered_{false};
   std::mutex process_mutex_;
+  std::mutex worker_mutex_;
+  std::condition_variable worker_cv_;
+  std::thread detection_worker_;
+  bool worker_running_{false};
+  std::optional<DetectionWorkItem> pending_work_;
+  std::mutex result_mutex_;
+  std::optional<DetectionWorkResult> latest_result_;
+  rclcpp::TimerBase::SharedPtr result_timer_;
+  int scheduled_frame_counter_{0};
 };
 
 }  // namespace smart_follower_perception

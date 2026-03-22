@@ -59,37 +59,19 @@ float sample_depth_m(
   return valid[valid.size() / 2];
 }
 
-std::optional<geometry_msgs::msg::Point> pixel_to_base_point(
-  const cv::Rect2f & bbox,
-  float depth_m,
+std::optional<geometry_msgs::msg::TransformStamped> lookup_camera_to_base_transform(
   const std_msgs::msg::Header & header,
-  const image_geometry::PinholeCameraModel & camera_model,
   tf2_ros::Buffer & tf_buffer,
   const std::string & base_frame,
-  float depth_min_m,
-  float depth_max_m,
   const rclcpp::Logger & logger,
   rclcpp::Clock & clock)
 {
-  if (!std::isfinite(depth_m) || depth_m < depth_min_m || depth_m > depth_max_m) {
-    return std::nullopt;
-  }
-
-  const double cx = static_cast<double>(bbox.x + bbox.width * 0.5F);
-  const double cy = static_cast<double>(bbox.y + bbox.height * 0.5F);
-  const auto ray = camera_model.projectPixelTo3dRay(cv::Point2d(cx, cy));
-
-  geometry_msgs::msg::PointStamped cam_point;
-  cam_point.header = header;
-  cam_point.point.x = ray.x * depth_m;
-  cam_point.point.y = ray.y * depth_m;
-  cam_point.point.z = depth_m;
-
   try {
-    const auto tf = tf_buffer.lookupTransform(base_frame, header.frame_id, header.stamp, tf2::durationFromSec(0.02));
-    geometry_msgs::msg::PointStamped base_point;
-    tf2::doTransform(cam_point, base_point, tf);
-    return base_point.point;
+    return tf_buffer.lookupTransform(
+      base_frame,
+      header.frame_id,
+      header.stamp,
+      tf2::durationFromSec(0.02));
   } catch (const tf2::TransformException & ex) {
     RCLCPP_WARN_THROTTLE(
       logger,
@@ -101,6 +83,34 @@ std::optional<geometry_msgs::msg::Point> pixel_to_base_point(
       ex.what());
     return std::nullopt;
   }
+}
+
+std::optional<geometry_msgs::msg::Point> pixel_to_base_point(
+  const cv::Rect2f & bbox,
+  float depth_m,
+  const image_geometry::PinholeCameraModel & camera_model,
+  const geometry_msgs::msg::TransformStamped & camera_to_base_tf,
+  float depth_min_m,
+  float depth_max_m)
+{
+  if (!std::isfinite(depth_m) || depth_m < depth_min_m || depth_m > depth_max_m) {
+    return std::nullopt;
+  }
+
+  const double cx = static_cast<double>(bbox.x + bbox.width * 0.5F);
+  const double cy = static_cast<double>(bbox.y + bbox.height * 0.5F);
+  const auto ray = camera_model.projectPixelTo3dRay(cv::Point2d(cx, cy));
+
+  geometry_msgs::msg::PointStamped cam_point;
+  cam_point.header.frame_id = camera_to_base_tf.child_frame_id;
+  cam_point.header.stamp = camera_to_base_tf.header.stamp;
+  cam_point.point.x = ray.x * depth_m;
+  cam_point.point.y = ray.y * depth_m;
+  cam_point.point.z = depth_m;
+
+  geometry_msgs::msg::PointStamped base_point;
+  tf2::doTransform(cam_point, base_point, camera_to_base_tf);
+  return base_point.point;
 }
 
 }  // namespace smart_follower_perception

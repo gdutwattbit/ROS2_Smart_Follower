@@ -6,6 +6,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 
+#include "smart_follower_perception/runtime.hpp"
 #include "smart_follower_perception/tracker.hpp"
 
 namespace smart_follower_perception
@@ -51,6 +52,8 @@ struct PerceptionParams
   int reid_input_h{256};
   int person_class_id{0};
   float yolo_conf_threshold{0.25F};
+  OrtRuntimeConfig yolo_ort;
+  OrtRuntimeConfig reid_ort;
   CostWeights weights;
 };
 
@@ -68,12 +71,18 @@ inline void declare_parameters(rclcpp_lifecycle::LifecycleNode & node, const Per
   node.declare_parameter("yolo.input_h", defaults.yolo_input_h);
   node.declare_parameter("yolo.person_class_id", defaults.person_class_id);
   node.declare_parameter("yolo.conf_threshold", defaults.yolo_conf_threshold);
+  node.declare_parameter("yolo.ort.intra_op_num_threads", defaults.yolo_ort.intra_op_num_threads);
+  node.declare_parameter("yolo.ort.inter_op_num_threads", defaults.yolo_ort.inter_op_num_threads);
+  node.declare_parameter("yolo.ort.execution_mode", defaults.yolo_ort.execution_mode_parallel ? "parallel" : "sequential");
 
   node.declare_parameter("reid.model_path", defaults.reid_model_path);
   node.declare_parameter("reid.input_w", defaults.reid_input_w);
   node.declare_parameter("reid.input_h", defaults.reid_input_h);
   node.declare_parameter("reid.ema_alpha", defaults.ema_alpha);
   node.declare_parameter("reid.recover_threshold", defaults.reid_recover_threshold);
+  node.declare_parameter("reid.ort.intra_op_num_threads", defaults.reid_ort.intra_op_num_threads);
+  node.declare_parameter("reid.ort.inter_op_num_threads", defaults.reid_ort.inter_op_num_threads);
+  node.declare_parameter("reid.ort.execution_mode", defaults.reid_ort.execution_mode_parallel ? "parallel" : "sequential");
 
   node.declare_parameter("sync_slop", defaults.sync_slop);
   node.declare_parameter("process_every_n_frames", defaults.process_every_n_frames);
@@ -119,12 +128,18 @@ inline void load_parameters(rclcpp_lifecycle::LifecycleNode & node, PerceptionPa
   params.yolo_input_h = node.get_parameter("yolo.input_h").as_int();
   params.person_class_id = node.get_parameter("yolo.person_class_id").as_int();
   params.yolo_conf_threshold = node.get_parameter("yolo.conf_threshold").as_double();
+  params.yolo_ort.intra_op_num_threads = std::max<int>(1, static_cast<int>(node.get_parameter("yolo.ort.intra_op_num_threads").as_int()));
+  params.yolo_ort.inter_op_num_threads = std::max<int>(1, static_cast<int>(node.get_parameter("yolo.ort.inter_op_num_threads").as_int()));
+  params.yolo_ort.execution_mode_parallel = node.get_parameter("yolo.ort.execution_mode").as_string() == "parallel";
 
   params.reid_model_path = node.get_parameter("reid.model_path").as_string();
   params.reid_input_w = node.get_parameter("reid.input_w").as_int();
   params.reid_input_h = node.get_parameter("reid.input_h").as_int();
   params.ema_alpha = node.get_parameter("reid.ema_alpha").as_double();
   params.reid_recover_threshold = node.get_parameter("reid.recover_threshold").as_double();
+  params.reid_ort.intra_op_num_threads = std::max<int>(1, static_cast<int>(node.get_parameter("reid.ort.intra_op_num_threads").as_int()));
+  params.reid_ort.inter_op_num_threads = std::max<int>(1, static_cast<int>(node.get_parameter("reid.ort.inter_op_num_threads").as_int()));
+  params.reid_ort.execution_mode_parallel = node.get_parameter("reid.ort.execution_mode").as_string() == "parallel";
 
   params.sync_slop = node.get_parameter("sync_slop").as_double();
   params.process_every_n_frames = std::max<int>(1, static_cast<int>(node.get_parameter("process_every_n_frames").as_int()));
@@ -170,11 +185,17 @@ inline void apply_parameter_override(PerceptionParams & target, const rclcpp::Pa
   else if (name == "yolo.input_h") target.yolo_input_h = param.as_int();
   else if (name == "yolo.person_class_id") target.person_class_id = param.as_int();
   else if (name == "yolo.conf_threshold") target.yolo_conf_threshold = param.as_double();
+  else if (name == "yolo.ort.intra_op_num_threads") target.yolo_ort.intra_op_num_threads = std::max<int>(1, static_cast<int>(param.as_int()));
+  else if (name == "yolo.ort.inter_op_num_threads") target.yolo_ort.inter_op_num_threads = std::max<int>(1, static_cast<int>(param.as_int()));
+  else if (name == "yolo.ort.execution_mode") target.yolo_ort.execution_mode_parallel = param.as_string() == "parallel";
   else if (name == "reid.model_path") target.reid_model_path = param.as_string();
   else if (name == "reid.input_w") target.reid_input_w = param.as_int();
   else if (name == "reid.input_h") target.reid_input_h = param.as_int();
   else if (name == "reid.ema_alpha") target.ema_alpha = param.as_double();
   else if (name == "reid.recover_threshold") target.reid_recover_threshold = param.as_double();
+  else if (name == "reid.ort.intra_op_num_threads") target.reid_ort.intra_op_num_threads = std::max<int>(1, static_cast<int>(param.as_int()));
+  else if (name == "reid.ort.inter_op_num_threads") target.reid_ort.inter_op_num_threads = std::max<int>(1, static_cast<int>(param.as_int()));
+  else if (name == "reid.ort.execution_mode") target.reid_ort.execution_mode_parallel = param.as_string() == "parallel";
   else if (name == "sync_slop") target.sync_slop = param.as_double();
   else if (name == "process_every_n_frames") target.process_every_n_frames = std::max<int>(1, static_cast<int>(param.as_int()));
   else if (name == "detect_every_n_frames") target.detect_every_n_frames = std::max<int>(1, static_cast<int>(param.as_int()));

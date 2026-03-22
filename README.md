@@ -4,47 +4,49 @@
 
 主链路：
 
-**感知（YOLO26n + 跟踪 + 深度 + ReID） → 跟随控制 → 安全避障 → 仲裁输出**
+**感知（YOLO + 跟踪 + 深度 + ReID）→ 跟随控制 → 安全避障 → 仲裁输出**
 
 ---
 
 ## 1. 当前版本
 
-- **当前发布版本：`alpha-0.1.2`**
-- **上一版本：`alpha-0.1.1`**
-- **上一稳定快照：`alpha-0.0.4`**
-- **上一调试快照：`dev-0.0.1.1`**
+- **当前发布版本：`alpha-0.1.3`**
+- **上一版本：`alpha-0.1.2`**
 - **状态：Usable Alpha**
 
-### alpha-0.1.2（2026-03-18）本轮重点
+### alpha-0.1.3（2026-03-22）本轮重点
 
-这一版主要补的是 **P0 级稳定性与工程化兜底**：
+这一版主要聚焦在 **感知性能优化、默认运行组合收口、profiling 细化**：
 
-- ReID ONNX 推理异常已做 `try/catch` 兜底，异常时不会再直接带崩感知节点
-- 感知 / 跟随 / 避障 / 仲裁 / 超声波 diagnostics 不再永远显示 OK，改为实际输出 `OK / WARN / ERROR`
-- `smart_follower_bringup` 已补 `ament_index_python` 运行依赖，避免 launch 在新环境中 import 失败
-- CMake / package.xml 的 lint 接入已从“声明未生效”改为**实际执行**
-- 当前 lint 策略采用 **`ament_cmake_lint_cmake + ament_cmake_xmllint`**，先保证工程可持续验收，不把历史风格债一次性混入当前稳定性修复
-- 已在虚拟机 `wheeltec@192.168.220.131` 上完成清理后的 build/test 回归，结果为 **37 tests passed, 0 failures**
+- 默认感知模型路径已切换到当前实测推荐组合：
+  - YOLO：`models/yolo26n_static_480x640_simplify_e2e.onnx`
+  - ReID：`models/osnet_x0_5_512.onnx`
+- `perception_params.yaml` 默认输入尺寸已收口为相机真实规格：`640x480 @ 30fps`
+- 感知异步 worker 链路继续沿用，配套 `pipeline_utils.*` 收口检测任务与消息构建流程
+- ReID 裁剪去掉不必要的 `clone()`，减少每个检测框的一次图像拷贝
+- `/person_pose` 消息构建阶段新增细粒度 profiling：
+  - `tf_lookup_ms`
+  - `tf_transform_ms`
+  - `message_fill_ms`
+- TF 查询由“每个目标查一次”改为“每帧查一次后复用”，减少重复开销
+- ONNX Runtime 线程参数已接入感知配置，可继续做实机组合调优
+- 新增并更新根目录文档：
+  - `test.md`
+  - `当前推荐运行组合.md`
+  - `YOLO_优化实施清单.md`
+  - `ORT_线程调优测试计划.md`
 
-### alpha-0.1.1（2026-03-17）上一轮重点
+### 当前推荐运行组合（实机验证）
 
-- 控制侧抽出公共常量、生命周期工具与 runtime 子模块
-- `arbiter / follower / obstacle / ultrasonic` 四条控制子链路的核心逻辑进一步从节点类中剥离
-- 统一运行时版本字符串与部分公共语义说明
-- 澄清 `TrackedPerson` 与 `PersonPoseArray` 的 2D / 3D 字段语义
+- 感知：异步版 perception
+- YOLO：`models/yolo26n_static_480x640_simplify_e2e.onnx`
+- ReID：`models/osnet_x0_5_512.onnx`
+- YOLO ORT：`intra=3 / inter=1 / sequential`
+- ReID ORT：`intra=1 / inter=1 / sequential`
 
-### alpha-0.1.0（2026-03-17）结构重构重点
-
-- 感知侧将超大文件 `perception_node.cpp` 拆分为：
-  - `runtime`
-  - `frame_sync`
-  - `tracker`
-  - `lock_manager`
-  - `geometry_utils`
-  - `params / diagnostics`
-- 新增 `smart_follower_perception_core` 便于单元测试与后续复用
-- 新增感知单元测试：`test_frame_sync`、`test_lock_manager`、`test_tracker`
+详细数据请看：
+- `test.md`
+- `当前推荐运行组合.md`
 
 ---
 
@@ -52,21 +54,20 @@
 
 本项目面向带深度相机与超声波的差速底盘，目标是实现：
 
-- 基于 YOLO26n 的人体检测
-- 基于卡尔曼 + 匈牙利匹配 + ReID 的目标保持
-- 基于深度图的测距与 3D 坐标转换
+- 基于 YOLO 的人体检测
+- 基于卡尔曼 + 匈牙利匹配 + ReID 的多目标跟踪
+- 基于深度图的测距与 3D 坐标变换
 - 基于 PID 的机器人跟随控制
-- 基于超声波 + 深度距离的安全避障
-- 基于状态机的最终速度仲裁
-- 显式锁定 / 解锁 / 复位 / 急停控制
+- 基于深度 + 超声波的安全避障
+- 基于状态机的速度仲裁与人工复位
 
-默认系统假设：
+当前默认系统假设：
 
 - 相机输入：`640x480 @ 30fps`
-- 感知主处理频率：约 `10Hz`（默认每 3 帧做一次检测）
-- 控制输出频率：`20Hz`
-- 目标跟随距离：`1.0m`
-- 底盘：差速小车
+- 深度：`/camera/depth/image_raw`
+- D2C：已开启，深度对齐到彩色
+- 感知输出：`/robot1/person_pose`（默认命名空间下）
+- 最终底盘输出：全局 `/cmd_vel`
 
 ---
 
@@ -74,22 +75,25 @@
 
 ```text
 ros2_smart_follower/
-├─ src/
-│  ├─ smart_follower_msgs/         # 自定义消息
-│  ├─ smart_follower_perception/   # 感知链路（YOLO / ReID / 跟踪 / 深度 / 锁定）
-│  ├─ smart_follower_control/      # 跟随控制 / 避障 / 仲裁 / 键盘 / 超声波
-│  └─ smart_follower_bringup/      # launch 与参数
-├─ models/                         # ONNX 模型
-├─ scripts/                        # 环境安装与辅助脚本
-├─ pyproject.toml                  # Python 工具链（uv）
-├─ DEPENDENCIES.md
-├─ CHANGELOG.md
-└─ README.md
+├── src/
+│   ├── smart_follower_msgs/
+│   ├── smart_follower_perception/
+│   ├── smart_follower_control/
+│   └── smart_follower_bringup/
+├── models/
+├── scripts/
+├── README.md
+├── CHANGELOG.md
+├── DEPENDENCIES.md
+├── test.md
+├── 当前推荐运行组合.md
+├── YOLO_优化实施清单.md
+└── ORT_线程调优测试计划.md
 ```
 
 ---
 
-## 4. 功能架构
+## 4. 关键特性
 
 ### 4.1 感知链路
 
@@ -99,174 +103,120 @@ ros2_smart_follower/
 - `/camera/color/camera_info`
 
 主要逻辑：
-- RGB / Depth / CameraInfo 普通订阅 + 最近帧缓存 + 手工时间戳匹配
-- YOLO26n 低频检测，仅保留 `person`
-- ReID 使用 ResNet50-2048 ONNX
-- 跟踪器融合 IoU / 中心距离 / 深度差 / 外观代价
-- 深度采用中心 `5x5` 中值采样，单位 `mm -> m`
-- 坐标使用 `tf2` 转到 `base_footprint`
-- 输出全目标列表 + 当前锁定 ID
-
-输出：
-- `/<robot_ns>/person_pose`
+- 普通订阅 + 最近帧缓存 + 手工时间戳匹配
+- YOLO 低频检测，跟踪补齐中间帧
+- ReID 特征提取与短期记忆恢复
+- 深度 5x5 中值采样
+- `tf2` 转换到 `base_footprint`
+- 显式锁定 / 保持 / LOST 后重识别
 
 ### 4.2 控制链路
 
-- `follower_controller_node`：20Hz 输出 `/cmd_vel_follow`
-- `obstacle_avoidance_node`：20Hz 输出 `/cmd_vel_avoid`
-- `arbiter_node`：20Hz 持续发布最终 `/cmd_vel`
-- `keyboard_command_node`：发布锁定 / 解锁 / 复位 / 急停命令
-- `ultrasonic_range_node`：左右前超声波测距，支持 dry mode
+- 跟随控制：20Hz
+- 避障：深度中央扇区 + 左右超声波融合
+- 仲裁：`FOLLOW / SEARCH / AVOID / STOP`
+- 急停后不自动恢复，需人工 `RESET`
+
+### 4.3 生命周期与热更新
+
+核心节点使用 Lifecycle。
+当前已支持多项运行时参数热更新，包括：
+- 感知模型路径 / 线程配置
+- 跟踪与同步参数
+- 控制 / 避障 / 超声波相关参数
 
 ---
 
-## 5. 消息语义说明
+## 5. 当前默认模型与参数
 
-### `TrackedPerson.msg`
+默认 YAML 已切到当前推荐组合：
 
-- `bbox`：**彩色图像像素坐标系** 下的 2D 框
-- `position / velocity`：`PersonPoseArray.header.frame_id` 对应坐标系下的 **3D 信息**
-- `appearance_feature`：当前版本为 **2048 维**
+```yaml
+yolo:
+  model_path: models/yolo26n_static_480x640_simplify_e2e.onnx
+  input_w: 640
+  input_h: 480
+  ort:
+    intra_op_num_threads: 3
+    inter_op_num_threads: 1
+    execution_mode: sequential
 
-### `PersonPoseArray.msg`
-
-- `header.stamp`：原始图像时间戳
-- `header.frame_id`：**只约束 3D 字段**（如 `position / velocity`）
-- `lock_id`：当前锁定目标 ID，未锁定时为 `-1`
-
-> 注意：`header.frame_id` 不约束 `bbox`，因为 `bbox` 始终是图像像素坐标。
-
----
-
-## 6. 模型约定
-
-默认模型路径：
-
-- YOLO：`models/yolo26n.onnx`
-- ReID：`models/reid_resnet50_2048.onnx`
-
-当前 ReID 约定：
-
-- 输入尺寸：`128 x 256`（W x H）
-- 输出维度：`2048`
-- 预处理：RGB + resize + ImageNet mean/std 归一化
-
----
-
-## 7. 依赖
-
-### 7.1 ROS 2 / C++ 运行时
-
-- ROS 2 Humble
-- OpenCV
-- Eigen3
-- ONNX Runtime C++ SDK
-- tf2 / tf2_ros / tf2_geometry_msgs
-- diagnostic_updater
-- libgpiod（超声波 GPIO 后端；不可用时自动 dry mode）
-
-### 7.2 Python 工具链
-
-本项目保留 `uv` 管理的 Python 工具链，主要用于：
-
-- YOLO ONNX 导出
-- ReID 训练 / 导出 / 校验
-
-常见命令：
-
-```bash
-uv sync
-uv run --group validate python src/smart_follower_perception/scripts/validate_reid_onnx.py --help
+reid:
+  model_path: models/osnet_x0_5_512.onnx
+  input_w: 128
+  input_h: 256
+  ort:
+    intra_op_num_threads: 1
+    inter_op_num_threads: 1
+    execution_mode: sequential
 ```
 
-> 当前推荐：训练与校验可以在目标机或虚拟机执行；完整导出链路更推荐在本地开发机执行。
+说明：
+- 主消息接口仍保持 `2048` 维外观特征字段
+- OSNet 的 `512` 维输出会补零到 `2048` 维，便于维持当前接口兼容
 
 ---
 
-## 8. 构建与测试
+## 6. 运行与测试
 
-### 8.1 构建
+### 6.1 构建
 
 ```bash
-source /opt/ros/humble/setup.bash
 colcon build --symlink-install
 ```
 
-### 8.2 测试
-
-```bash
-source /opt/ros/humble/setup.bash
-colcon test --event-handlers console_direct+
-colcon test-result --verbose
-```
-
-### 8.3 当前 lint 策略
-
-当前版本实际启用：
-
-- `ament_cmake_lint_cmake`
-- `ament_cmake_xmllint`
-
-说明：
-- 之前仓库中存在较多历史 `cpplint / flake8 / uncrustify` 风格债
-- `alpha-0.1.2` 先保证稳定性修复、诊断修复和验收链路是绿色的
-- 后续再单独开一轮风格清理，不把两类问题混在一起
-
----
-
-## 9. 启动
-
-### 9.1 仅启动本系统
+### 6.2 启动仅本项目链路
 
 ```bash
 ros2 launch smart_follower_bringup smart_follower_only.launch.py
 ```
 
-### 9.2 联合底盘与相机启动
+### 6.3 完整启动
 
 ```bash
 ros2 launch smart_follower_bringup smart_follower.launch.py
 ```
 
-说明：
-- 系统内部话题使用命名空间
-- 最终底盘控制输出保持全局 `/cmd_vel`
-- 默认 `robot_ns` 一般为 `robot1`
+### 6.4 常用观测项
+
+```bash
+ros2 topic hz /robot1/person_pose
+ros2 topic echo /robot1/person_pose --once
+ros2 lifecycle get /robot1/perception_node
+ros2 param get /robot1/perception_node yolo.model_path
+```
 
 ---
 
-## 10. diagnostics 与降级行为
+## 7. Profiling 与调优建议
 
-### 感知侧
+当前 profiling 已覆盖：
 
-- YOLO 未 ready：`ERROR`
-- ReID 未 ready：`WARN`
-- color / depth / camera_info 长时间无输入：`WARN / ERROR`
-- `person_pose` 长时间未发布：`WARN / ERROR`
+- `camera_info_ms`
+- `cv_bridge_ms`
+- `yolo_ms`
+- `depth_ms`
+- `reid_ms`
+- `recover_ms`
+- `tracking_ms`
+- `lock_ms`
+- `tf_lookup_ms`
+- `tf_transform_ms`
+- `message_fill_ms`
+- `message_ms`
+- `publish_ms`
+- `total_ms`
 
-### 控制侧
+建议优先优化顺序：
 
-- follower 未收到目标或目标超时：`WARN / ERROR`
-- obstacle 输入全部失效：`ERROR`
-- ultrasonic dry mode：`WARN`
-- arbiter stop latched：`ERROR`
-
----
-
-## 11. 已验证环境
-
-### 虚拟机
-- 主机：`wheeltec@192.168.220.131`
-- 结果：`alpha-0.1.2` 已完成构建与测试回归
-- 本轮结果：**37 tests passed, 0 failures**
-
-### 小车主控容器
-- 用途：部署与运行
-- 当前建议：开发在本地机 / 虚拟机进行，主控容器只做部署、编译与联调
+1. YOLO 主耗时
+2. 检测频率自适应
+3. ReID 在真实有人场景下的线程调优
+4. ROI 检测 / 更细粒度流水线优化
 
 ---
 
-## 12. 版本演进
+## 8. 版本轨迹
 
 - `alpha-0.0.1`：首个 Alpha 主链路落地
 - `alpha-0.0.1.1`：ReID 切换到 ResNet50-2048
@@ -277,14 +227,10 @@ ros2 launch smart_follower_bringup smart_follower.launch.py
 - `alpha-0.1.0`：感知结构重构 + 单元测试补齐
 - `alpha-0.1.1`：控制侧公共骨架、版本统一、消息语义澄清
 - `alpha-0.1.2`：P0 稳定性修复、diagnostics 分级、bringup 依赖补齐、lint 实接入
+- `alpha-0.1.3`：推荐模型默认化、感知异步链路文档收口、TF/消息 profiling 细化、减少不必要图像拷贝
 
 ---
 
-## 13. 后续建议
+## 9. 备注
 
-下一轮建议优先级：
-
-1. 补 `ultrasonic_runtime` 单元测试
-2. 继续统一控制侧大节点的参数与生命周期样板
-3. 单独开一轮 `cpplint / flake8 / uncrustify` 风格债清理
-4. 再做感知性能 profiling 与异步化优化
+如果你要继续做性能优化，建议先从 `test.md` 和 `当前推荐运行组合.md` 开始，看完当前实机数据再决定下一步。

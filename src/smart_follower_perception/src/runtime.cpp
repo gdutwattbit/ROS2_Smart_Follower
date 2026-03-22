@@ -21,6 +21,17 @@ namespace smart_follower_perception
 namespace
 {
 namespace fs = std::filesystem;
+
+#ifdef HAVE_ONNXRUNTIME
+void apply_ort_runtime_config(Ort::SessionOptions & session_options, const OrtRuntimeConfig & config)
+{
+  session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+  session_options.SetExecutionMode(
+    config.execution_mode_parallel ? ExecutionMode::ORT_PARALLEL : ExecutionMode::ORT_SEQUENTIAL);
+  session_options.SetIntraOpNumThreads(std::max(1, config.intra_op_num_threads));
+  session_options.SetInterOpNumThreads(std::max(1, config.inter_op_num_threads));
+}
+#endif
 }
 
 std::string resolve_model_path(const std::string & input_path)
@@ -82,13 +93,20 @@ std::string resolve_model_path(const std::string & input_path)
   return input_path;
 }
 
-void YoloDetector::configure(const std::string & model_path, int input_w, int input_h, int person_class_id, float conf_threshold)
+void YoloDetector::configure(
+  const std::string & model_path,
+  int input_w,
+  int input_h,
+  int person_class_id,
+  float conf_threshold,
+  const OrtRuntimeConfig & ort_config)
 {
   model_path_ = model_path;
   input_w_ = input_w;
   input_h_ = input_h;
   person_class_id_ = person_class_id;
   conf_threshold_ = conf_threshold;
+  ort_config_ = ort_config;
 #ifdef HAVE_ONNXRUNTIME
   session_.reset();
   try {
@@ -224,8 +242,8 @@ void YoloDetector::init_runtime()
   if (!env_) {
     env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "smart_follower_yolo");
   }
-  session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-  session_options_.SetIntraOpNumThreads(1);
+  session_options_ = Ort::SessionOptions{};
+  apply_ort_runtime_config(session_options_, ort_config_);
   session_ = std::make_unique<Ort::Session>(*env_, model_path_.c_str(), session_options_);
 
   Ort::AllocatorWithDefaultOptions allocator;
@@ -255,11 +273,16 @@ std::vector<YoloDetector::Result> YoloDetector::nms(const std::vector<Result> & 
   return keep;
 }
 
-void ReidExtractor::configure(const std::string & model_path, int input_w, int input_h)
+void ReidExtractor::configure(
+  const std::string & model_path,
+  int input_w,
+  int input_h,
+  const OrtRuntimeConfig & ort_config)
 {
   model_path_ = model_path;
   input_w_ = input_w;
   input_h_ = input_h;
+  ort_config_ = ort_config;
   output_dim_mismatch_ = false;
   output_dim_error_msg_.clear();
 #ifdef HAVE_ONNXRUNTIME
@@ -309,7 +332,7 @@ std::array<float, kFeatureDim> ReidExtractor::extract(const cv::Mat & bgr, const
     return feat;
   }
 
-  cv::Mat crop = bgr(roi).clone();
+  const cv::Mat crop = bgr(roi);
   cv::Mat rgb;
   cv::cvtColor(crop, rgb, cv::COLOR_BGR2RGB);
   cv::Mat resized;
@@ -412,8 +435,8 @@ void ReidExtractor::init_runtime()
   if (!env_) {
     env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "smart_follower_reid");
   }
-  session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-  session_options_.SetIntraOpNumThreads(1);
+  session_options_ = Ort::SessionOptions{};
+  apply_ort_runtime_config(session_options_, ort_config_);
   session_ = std::make_unique<Ort::Session>(*env_, model_path_.c_str(), session_options_);
 
   Ort::AllocatorWithDefaultOptions allocator;
