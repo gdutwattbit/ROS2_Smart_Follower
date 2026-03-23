@@ -50,8 +50,13 @@ struct DetectionWorkResult
   bool run_detect{false};
   double cv_bridge_ms{0.0};
   double yolo_ms{0.0};
+  double yolo_preprocess_ms{0.0};
+  double yolo_run_ms{0.0};
+  double yolo_postprocess_ms{0.0};
   double depth_ms{0.0};
   double reid_ms{0.0};
+  double reid_preprocess_ms{0.0};
+  double reid_run_ms{0.0};
   std::vector<Detection> detections;
   std::string reid_dim_error;
 };

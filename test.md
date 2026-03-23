@@ -421,3 +421,203 @@ yolo:
 1. 维持 `YOLO intra=3 / sequential`
 2. 在**有人体进入画面**的条件下，补做 ReID 线程测试
 3. 若 ReID 线程测试完成后收益不明显，再决定是否继续尝试 `inter_op_num_threads > 1`
+
+
+## 11. 第五组测试：小车端单路最终推荐组合实测（含资源占用基线）
+
+测试时间：2026-03-22  
+测试目的：在**小车主控 ros2 容器**内，用当前最终推荐组合做一轮真实相机实测，记录**时延 + CPU/内存占用**，作为后续评估“是否值得做 2 路 YOLO+ReID” 的基线。
+
+### 11.1 测试前提
+
+本轮在**小车主控 `192.168.0.100`** 上完成，方式如下：
+
+- 先清空小车端旧工作区，再同步当前本地项目
+- 容器：`ros2`（`ros2:wheeltec_V1.1`）
+- 感知/控制工作区：`/home/wheeltec/ros2_shared_dir/ros2_smart_follower`
+- 相机驱动来源：额外 source 了宿主机工作区
+  - `/home/wheeltec/wheeltec_ros2/install/setup.bash`
+- ONNX Runtime 路径：
+  - `/home/wheeltec/wheeltec_ros2/third_party/onnxruntime-linux-aarch64-1.24.3`
+- GPIO 后端：`libgpiod`
+
+本轮实际启动方式等价于：
+
+- `smart_follower.launch.py`
+- `bringup_robot:=false`
+- `bringup_camera:=true`
+
+说明：
+- 这样可以在容器内直接拉起 Astra 相机节点与当前 smart follower 主链路
+- 不启动底盘本体 bringup，避免串口/底盘状态干扰本轮纯感知性能测试
+
+### 11.2 本轮固定配置
+
+- 感知实现：异步版 perception（单 worker）
+- YOLO：`models/yolo26n_static_480x640_simplify_e2e.onnx`
+- ReID：`models/osnet_x0_5_512.onnx`
+- YOLO ORT：`intra=3 / inter=1 / sequential`
+- ReID ORT：`intra=1 / inter=1 / sequential`
+- `async_worker_count=1`
+- `process_every_n_frames=3`
+- 相机模式：Astra，`640x480`
+- 画面状态：**镜头中存在 1 个稳定人体目标**
+
+日志确认：
+
+- `YOLO ready=1`
+- `ReID ready=1`
+- 稳定持续看到：
+  - `detections=1`
+  - `persons=1`
+  - `tracks=1`
+
+### 11.3 链路时延结果
+
+稳定日志尾部多次收敛到如下水平：
+
+| 阶段 | 平均耗时（ms） |
+|---|---:|
+| camera_info | 0.01 |
+| cv_bridge | 0.64 |
+| yolo | 223.85 |
+| └─ yolo_preprocess | 4.18 |
+| └─ yolo_run | 219.59 |
+| └─ yolo_postprocess | 0.04 |
+| depth | 0.02 |
+| reid | 40.11 |
+| └─ reid_preprocess | 1.59 |
+| └─ reid_run | 38.43 |
+| recover | 0.00 |
+| tracking | 0.41 |
+| lock | 0.00 |
+| tf_lookup | 22.10 |
+| tf_transform | 0.00 |
+| msg_fill | 0.04 |
+| message | 22.16 |
+| publish | 0.56 |
+| total | 293.42 |
+
+对应日志样例：
+
+- `profile avg_ms total=293.42 ... yolo=223.85 ... reid=40.11 ... message=22.16 ... publish=0.56`
+
+### 11.4 输出频率与输入频率
+
+实测 `ros2 topic hz` 结果：
+
+- `/camera/color/image_raw`：约 `11.778 Hz`
+- `/robot1/person_pose`：约 `2.243 Hz`
+
+说明：
+- 本轮观测到的**实际进入 ROS 图的彩色输入频率并不是预期中的 30Hz**，而是约 `11.8Hz`
+- 在 `process_every_n_frames=3` 的前提下，感知可调度上限本身就会被进一步压低
+- 由于单 worker 推理耗时仍接近 `293ms`，所以最终 `person_pose` 输出稳定在约 `2.24Hz`
+
+### 11.5 资源占用结果（用于双路可行性评估）
+
+本轮对运行中的容器和关键进程做了连续采样。
+
+> 注：首个样本存在一次采样瞬态（`top` 行排序切换），以下均值按**剔除首个瞬态样本后的 11 个稳定样本**统计。
+
+#### 11.5.1 容器级 CPU
+
+| 指标 | 数值 |
+|---|---:|
+| ros2 容器 CPU 平均占用 | `279.17%` |
+| ros2 容器 CPU 峰值 | `350.39%` |
+
+说明：
+- 树莓派 5 为 4 大核，这里的 `279%` 可近似理解为**平均占用了 2.79 个 CPU 核**
+- 峰值超过 `350%`，说明短时会逼近 **3.5 个核**
+
+#### 11.5.2 perception_node 资源占用
+
+| 指标 | 数值 |
+|---|---:|
+| perception_node CPU 平均占用 | `196.00%` |
+| perception_node CPU 峰值 | `253.00%` |
+| perception_node RSS 平均 | `182.09 MiB` |
+| perception_node RSS 峰值 | `182.36 MiB` |
+| perception_node VIRT 稳定值 | 约 `1352.41 MiB` |
+
+说明：
+- 单个 `perception_node` 在真实运行中，已经长期占用**接近 2 个 CPU 核**
+- 高峰时会冲到 **2.5 核左右**
+- 常驻物理内存（RSS）约 **182 MiB**，内存压力不大，**主要瓶颈是 CPU**
+
+#### 11.5.3 相机进程资源占用（Astra）
+
+| 指标 | 数值 |
+|---|---:|
+| astra_camera_node CPU 平均占用 | `71.12%` |
+| astra_camera_node CPU 峰值 | `77.00%` |
+| astra_camera_node RSS 稳定值 | `107.44 MiB` |
+| astra_camera_node VIRT 稳定值 | 约 `1314.25 MiB` |
+
+说明：
+- 真实相机驱动本身就稳定占用约 **0.7 个核**
+- 所以“相机 + 单路感知”组合，已经构成当前小车端 CPU 负载主体
+
+### 11.6 运行中观察到的关键现象
+
+1. **单路链路已经能稳定跟到 1 个目标**
+   - `detections=1`
+   - `persons=1`
+   - `tracks=1`
+
+2. **YOLO 仍然是主瓶颈**
+   - `223.85 ms` 明显高于 ReID 的 `40.11 ms`
+
+3. **TF 仍未补齐**
+   - 持续出现：
+     - `TF lookup failed (base_footprint <- camera_color_optical_frame)`
+   - 这会稳定带来约 `22 ms` 的 `tf_lookup/message` 开销
+
+4. **单 worker 已经开始出现积压/丢帧**
+   - 日志中出现：
+     - `pending queue full, dropped oldest frame ...`
+   - 说明当前单路已经不能完全吃下相机输入
+
+5. **OSNet 512 维补零行为仍在**
+   - `ReID output dim 512 padded to 2048 for benchmarking compatibility`
+   - 属于预期行为，不影响本轮结论
+
+### 11.7 对“双路 YOLO+ReID”可行性的直接判断
+
+这轮数据对后续双路方案非常关键。
+
+当前单路基线大致是：
+
+- 相机驱动：约 `0.7` 核
+- perception：约 `2.0` 核，峰值到 `2.5` 核
+- 整个 ros2 容器：平均约 `2.8` 核，峰值约 `3.5` 核
+
+因此可以得到一个很直接的判断：
+
+1. **如果简单复制一整套第二路 perception**，大概率会把总负载推到 `4.5~5.0` 核量级
+2. 对树莓派 5 的 4 核 CPU 来说，这已经非常危险，容易导致：
+   - 系统调度抖动明显变大
+   - 两路互相争抢，单路时延反而上升
+   - 控制链路被拖慢
+3. 也就是说：
+   - **“直接双开完整 YOLO+ReID” 目前不算合理默认方案**
+   - 真要试双路，应该把它当成**受控实验**，而不是默认部署配置
+
+### 11.8 本轮结论
+
+本轮小车端真实实测可以得出：
+
+1. 当前最终推荐组合已经能在小车上稳定运行，单目标场景下可持续输出
+2. 单路最终推荐组合的稳定时延约为：
+   - `total ≈ 293 ms`
+   - `yolo ≈ 224 ms`
+   - `reid ≈ 40 ms`
+3. 当前真正的硬瓶颈仍然是 **YOLO CPU 推理**
+4. 从资源占用角度看：
+   - **单路已经吃掉接近 2 个核的纯感知算力**
+   - 再叠一整路完整 perception，风险很高
+5. 因此，后续若要探索“双路/多路推理”，建议优先顺序应当是：
+   - 先做**统一缓冲区 + 受控双 worker 实验**
+   - 同时严密监控 CPU、队列积压、输出频率、控制稳定性
+   - 不宜直接把双路方案当作默认量产配置

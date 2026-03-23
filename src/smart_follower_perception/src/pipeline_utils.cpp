@@ -76,6 +76,9 @@ bool run_detection_work_item(
     auto detector_results = yolo.detect(color);
     const auto yolo_end = SteadyClock::now();
     result.yolo_ms = elapsed_ms(yolo_begin, yolo_end);
+    result.yolo_preprocess_ms = yolo.last_profile().preprocess_ms;
+    result.yolo_run_ms = yolo.last_profile().run_ms;
+    result.yolo_postprocess_ms = yolo.last_profile().postprocess_ms;
 
     result.detections.reserve(detector_results.size());
     for (const auto & det : detector_results) {
@@ -95,6 +98,8 @@ bool run_detection_work_item(
       detection.feature = reid.extract(color, detection.bbox, feature_valid);
       const auto reid_end = SteadyClock::now();
       result.reid_ms += elapsed_ms(reid_begin, reid_end);
+      result.reid_preprocess_ms += reid.last_profile().preprocess_ms;
+      result.reid_run_ms += reid.last_profile().run_ms;
       detection.feature_valid = feature_valid;
 
       result.detections.push_back(detection);

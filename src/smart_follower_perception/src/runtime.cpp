@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -21,6 +22,7 @@ namespace smart_follower_perception
 namespace
 {
 namespace fs = std::filesystem;
+using SteadyClock = std::chrono::steady_clock;
 
 #ifdef HAVE_ONNXRUNTIME
 void apply_ort_runtime_config(Ort::SessionOptions & session_options, const OrtRuntimeConfig & config)
@@ -32,7 +34,68 @@ void apply_ort_runtime_config(Ort::SessionOptions & session_options, const OrtRu
   session_options.SetInterOpNumThreads(std::max(1, config.inter_op_num_threads));
 }
 #endif
+
+double elapsed_ms(const SteadyClock::time_point & begin, const SteadyClock::time_point & end)
+{
+  return std::chrono::duration<double, std::milli>(end - begin).count();
 }
+
+void fill_rgb_chw_from_bgr_u8(const cv::Mat & bgr, float * dst, bool normalize_255)
+{
+  const int width = bgr.cols;
+  const int height = bgr.rows;
+  const int plane_stride = width * height;
+  const float scale = normalize_255 ? (1.0F / 255.0F) : 1.0F;
+
+  float * r_plane = dst;
+  float * g_plane = dst + plane_stride;
+  float * b_plane = dst + plane_stride * 2;
+
+  for (int y = 0; y < height; ++y) {
+    const auto * row = bgr.ptr<cv::Vec3b>(y);
+    int offset = y * width;
+    for (int x = 0; x < width; ++x) {
+      const auto & pix = row[x];
+      const int index = offset + x;
+      r_plane[index] = static_cast<float>(pix[2]) * scale;
+      g_plane[index] = static_cast<float>(pix[1]) * scale;
+      b_plane[index] = static_cast<float>(pix[0]) * scale;
+    }
+  }
+}
+
+void fill_normalized_rgb_chw_from_bgr_u8(
+  const cv::Mat & bgr,
+  float * dst,
+  const std::array<float, 3> & mean,
+  const std::array<float, 3> & std)
+{
+  const int width = bgr.cols;
+  const int height = bgr.rows;
+  const int plane_stride = width * height;
+  constexpr float kScale = 1.0F / 255.0F;
+
+  float * r_plane = dst;
+  float * g_plane = dst + plane_stride;
+  float * b_plane = dst + plane_stride * 2;
+
+  for (int y = 0; y < height; ++y) {
+    const auto * row = bgr.ptr<cv::Vec3b>(y);
+    int offset = y * width;
+    for (int x = 0; x < width; ++x) {
+      const auto & pix = row[x];
+      const int index = offset + x;
+      const float r = static_cast<float>(pix[2]) * kScale;
+      const float g = static_cast<float>(pix[1]) * kScale;
+      const float b = static_cast<float>(pix[0]) * kScale;
+      r_plane[index] = (r - mean[0]) / std[0];
+      g_plane[index] = (g - mean[1]) / std[1];
+      b_plane[index] = (b - mean[2]) / std[2];
+    }
+  }
+}
+
+}  // namespace
 
 std::string resolve_model_path(const std::string & input_path)
 {
@@ -107,6 +170,7 @@ void YoloDetector::configure(
   person_class_id_ = person_class_id;
   conf_threshold_ = conf_threshold;
   ort_config_ = ort_config;
+  reset_runtime_cache();
 #ifdef HAVE_ONNXRUNTIME
   session_.reset();
   try {
@@ -114,6 +178,7 @@ void YoloDetector::configure(
   } catch (const Ort::Exception & ex) {
     std::fprintf(stderr, "[smart_follower][yolo] load model failed (%s): %s\n", model_path_.c_str(), ex.what());
     session_.reset();
+    reset_runtime_cache();
   }
 #else
   (void)model_path_;
@@ -131,46 +196,50 @@ bool YoloDetector::ready() const
 
 std::vector<YoloDetector::Result> YoloDetector::detect(const cv::Mat & bgr)
 {
+  last_profile_.reset();
 #ifdef HAVE_ONNXRUNTIME
-  if (!session_) {
+  if (!session_ || !mem_info_) {
     return {};
   }
 
-  cv::Mat rgb;
-  cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
-  cv::Mat resized;
-  cv::resize(rgb, resized, cv::Size(input_w_, input_h_));
-  resized.convertTo(resized, CV_32F, 1.0 / 255.0);
-
-  std::vector<float> input_tensor(3 * input_h_ * input_w_);
-  for (int y = 0; y < input_h_; ++y) {
-    for (int x = 0; x < input_w_; ++x) {
-      const auto pix = resized.at<cv::Vec3f>(y, x);
-      input_tensor[y * input_w_ + x] = pix[0];
-      input_tensor[input_h_ * input_w_ + y * input_w_ + x] = pix[1];
-      input_tensor[2 * input_h_ * input_w_ + y * input_w_ + x] = pix[2];
-    }
+  const auto preprocess_begin = SteadyClock::now();
+  const cv::Mat * input_image = &bgr;
+  if (bgr.cols != input_w_ || bgr.rows != input_h_) {
+    cv::resize(bgr, resize_scratch_, cv::Size(input_w_, input_h_));
+    input_image = &resize_scratch_;
   }
+  fill_yolo_input_tensor_from_bgr(*input_image);
+  const auto preprocess_end = SteadyClock::now();
+  last_profile_.preprocess_ms = elapsed_ms(preprocess_begin, preprocess_end);
 
-  std::array<int64_t, 4> input_shape{1, 3, input_h_, input_w_};
-  auto mem_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-  Ort::Value input = Ort::Value::CreateTensor<float>(mem_info, input_tensor.data(), input_tensor.size(), input_shape.data(), input_shape.size());
-  std::vector<const char *> input_names{input_name_.c_str()};
-  std::vector<const char *> output_names{output_name_.c_str()};
+  Ort::Value input = Ort::Value::CreateTensor<float>(
+    *mem_info_,
+    input_tensor_.data(),
+    input_tensor_.size(),
+    input_shape_.data(),
+    input_shape_.size());
+
   std::vector<Ort::Value> outputs;
+  const auto run_begin = SteadyClock::now();
   try {
-    outputs = session_->Run(Ort::RunOptions{nullptr}, input_names.data(), &input, 1, output_names.data(), 1);
+    outputs = session_->Run(
+      Ort::RunOptions{nullptr}, input_names_.data(), &input, 1, output_names_.data(), 1);
   } catch (const Ort::Exception & ex) {
     std::fprintf(stderr, "[smart_follower][yolo] ONNXRuntime inference failed: %s\n", ex.what());
+    last_profile_.run_ms = elapsed_ms(run_begin, SteadyClock::now());
     return {};
   }
+  const auto run_end = SteadyClock::now();
+  last_profile_.run_ms = elapsed_ms(run_begin, run_end);
   if (outputs.empty()) {
     return {};
   }
 
+  const auto postprocess_begin = SteadyClock::now();
   auto & out = outputs.front();
   auto shape = out.GetTensorTypeAndShapeInfo().GetShape();
   if (shape.size() != 3) {
+    last_profile_.postprocess_ms = elapsed_ms(postprocess_begin, SteadyClock::now());
     return {};
   }
 
@@ -226,7 +295,9 @@ std::vector<YoloDetector::Result> YoloDetector::detect(const cv::Mat & bgr)
       results.push_back(Result{box, conf});
     }
   }
-  return nms(results, 0.45F);
+  auto filtered = nms(results, 0.45F);
+  last_profile_.postprocess_ms = elapsed_ms(postprocess_begin, SteadyClock::now());
+  return filtered;
 #else
   (void)bgr;
   return {};
@@ -249,6 +320,35 @@ void YoloDetector::init_runtime()
   Ort::AllocatorWithDefaultOptions allocator;
   input_name_ = session_->GetInputNameAllocated(0, allocator).get();
   output_name_ = session_->GetOutputNameAllocated(0, allocator).get();
+
+  input_shape_ = {1, 3, static_cast<int64_t>(input_h_), static_cast<int64_t>(input_w_)};
+  input_tensor_.assign(static_cast<std::size_t>(3) * static_cast<std::size_t>(input_h_) *
+      static_cast<std::size_t>(input_w_), 0.0F);
+  mem_info_ = std::make_unique<Ort::MemoryInfo>(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault));
+  input_names_ = {input_name_.c_str()};
+  output_names_ = {output_name_.c_str()};
+#endif
+}
+
+void YoloDetector::reset_runtime_cache()
+{
+  last_profile_.reset();
+  resize_scratch_.release();
+#ifdef HAVE_ONNXRUNTIME
+  input_tensor_.clear();
+  input_shape_ = {1, 3, static_cast<int64_t>(input_h_), static_cast<int64_t>(input_w_)};
+  mem_info_.reset();
+  input_names_ = {nullptr};
+  output_names_ = {nullptr};
+#endif
+}
+
+void YoloDetector::fill_yolo_input_tensor_from_bgr(const cv::Mat & bgr)
+{
+#ifdef HAVE_ONNXRUNTIME
+  fill_rgb_chw_from_bgr_u8(bgr, input_tensor_.data(), true);
+#else
+  (void)bgr;
 #endif
 }
 
@@ -285,6 +385,7 @@ void ReidExtractor::configure(
   ort_config_ = ort_config;
   output_dim_mismatch_ = false;
   output_dim_error_msg_.clear();
+  reset_runtime_cache();
 #ifdef HAVE_ONNXRUNTIME
   session_.reset();
   try {
@@ -292,6 +393,7 @@ void ReidExtractor::configure(
   } catch (const Ort::Exception & ex) {
     std::fprintf(stderr, "[smart_follower][reid] load model failed (%s): %s\n", model_path_.c_str(), ex.what());
     session_.reset();
+    reset_runtime_cache();
   }
 #else
   (void)model_path_;
@@ -321,8 +423,9 @@ std::array<float, kFeatureDim> ReidExtractor::extract(const cv::Mat & bgr, const
 {
   std::array<float, kFeatureDim> feat{};
   valid = false;
+  last_profile_.reset();
 #ifdef HAVE_ONNXRUNTIME
-  if (!session_ || bbox.width < 2.0F || bbox.height < 2.0F) {
+  if (!session_ || !mem_info_ || bbox.width < 2.0F || bbox.height < 2.0F) {
     return feat;
   }
 
@@ -332,53 +435,41 @@ std::array<float, kFeatureDim> ReidExtractor::extract(const cv::Mat & bgr, const
     return feat;
   }
 
+  const auto preprocess_begin = SteadyClock::now();
   const cv::Mat crop = bgr(roi);
-  cv::Mat rgb;
-  cv::cvtColor(crop, rgb, cv::COLOR_BGR2RGB);
-  cv::Mat resized;
-  cv::resize(rgb, resized, cv::Size(input_w_, input_h_));
-
-  cv::Mat normalized;
-  resized.convertTo(normalized, CV_32F, 1.0 / 255.0);
-  constexpr std::array<float, 3> kMean{0.485F, 0.456F, 0.406F};
-  constexpr std::array<float, 3> kStd{0.229F, 0.224F, 0.225F};
-
-  std::vector<float> input_tensor(3 * input_h_ * input_w_);
-  for (int y = 0; y < input_h_; ++y) {
-    for (int x = 0; x < input_w_; ++x) {
-      const auto pix = normalized.at<cv::Vec3f>(y, x);
-      const float r = (pix[0] - kMean[0]) / kStd[0];
-      const float g = (pix[1] - kMean[1]) / kStd[1];
-      const float b = (pix[2] - kMean[2]) / kStd[2];
-      input_tensor[y * input_w_ + x] = r;
-      input_tensor[input_h_ * input_w_ + y * input_w_ + x] = g;
-      input_tensor[2 * input_h_ * input_w_ + y * input_w_ + x] = b;
-    }
+  const cv::Mat * input_image = &crop;
+  if (crop.cols != input_w_ || crop.rows != input_h_) {
+    cv::resize(crop, resize_scratch_, cv::Size(input_w_, input_h_));
+    input_image = &resize_scratch_;
   }
+  fill_reid_input_tensor_from_bgr(*input_image);
+  const auto preprocess_end = SteadyClock::now();
+  last_profile_.preprocess_ms = elapsed_ms(preprocess_begin, preprocess_end);
 
-  std::array<int64_t, 4> input_shape{1, 3, input_h_, input_w_};
-  auto mem_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
   auto input = Ort::Value::CreateTensor<float>(
-    mem_info,
-    input_tensor.data(),
-    input_tensor.size(),
-    input_shape.data(),
-    input_shape.size());
-  std::vector<const char *> input_names{input_name_.c_str()};
-  std::vector<const char *> output_names{output_name_.c_str()};
+    *mem_info_,
+    input_tensor_.data(),
+    input_tensor_.size(),
+    input_shape_.data(),
+    input_shape_.size());
+
   std::vector<Ort::Value> outputs;
+  const auto run_begin = SteadyClock::now();
   try {
     outputs = session_->Run(
       Ort::RunOptions{nullptr},
-      input_names.data(),
+      input_names_.data(),
       &input,
       1,
-      output_names.data(),
+      output_names_.data(),
       1);
   } catch (const Ort::Exception & ex) {
     std::fprintf(stderr, "[smart_follower][reid] ONNXRuntime inference failed: %s\n", ex.what());
+    last_profile_.run_ms = elapsed_ms(run_begin, SteadyClock::now());
     return feat;
   }
+  const auto run_end = SteadyClock::now();
+  last_profile_.run_ms = elapsed_ms(run_begin, run_end);
   if (outputs.empty()) {
     return feat;
   }
@@ -442,6 +533,37 @@ void ReidExtractor::init_runtime()
   Ort::AllocatorWithDefaultOptions allocator;
   input_name_ = session_->GetInputNameAllocated(0, allocator).get();
   output_name_ = session_->GetOutputNameAllocated(0, allocator).get();
+
+  input_shape_ = {1, 3, static_cast<int64_t>(input_h_), static_cast<int64_t>(input_w_)};
+  input_tensor_.assign(static_cast<std::size_t>(3) * static_cast<std::size_t>(input_h_) *
+      static_cast<std::size_t>(input_w_), 0.0F);
+  mem_info_ = std::make_unique<Ort::MemoryInfo>(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault));
+  input_names_ = {input_name_.c_str()};
+  output_names_ = {output_name_.c_str()};
+#endif
+}
+
+void ReidExtractor::reset_runtime_cache()
+{
+  last_profile_.reset();
+  resize_scratch_.release();
+#ifdef HAVE_ONNXRUNTIME
+  input_tensor_.clear();
+  input_shape_ = {1, 3, static_cast<int64_t>(input_h_), static_cast<int64_t>(input_w_)};
+  mem_info_.reset();
+  input_names_ = {nullptr};
+  output_names_ = {nullptr};
+#endif
+}
+
+void ReidExtractor::fill_reid_input_tensor_from_bgr(const cv::Mat & bgr)
+{
+#ifdef HAVE_ONNXRUNTIME
+  constexpr std::array<float, 3> kMean{0.485F, 0.456F, 0.406F};
+  constexpr std::array<float, 3> kStd{0.229F, 0.224F, 0.225F};
+  fill_normalized_rgb_chw_from_bgr_u8(bgr, input_tensor_.data(), kMean, kStd);
+#else
+  (void)bgr;
 #endif
 }
 
