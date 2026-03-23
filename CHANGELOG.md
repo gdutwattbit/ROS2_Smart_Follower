@@ -1,8 +1,41 @@
-# CHANGELOG
+﻿# CHANGELOG
 
-本文件记录 `ROS2 Smart Follower` 的主要版本变更。
+本文档记录 `ROS2 Smart Follower` 的主要版本变更。
 
 ## Unreleased
+
+## alpha-0.1.7 - 2026-03-23
+
+### Changed
+- 单目位置估计从“bbox 高度 + 人高假设”切换为 **bbox 底点地面投影**
+- perception 节点新增 Astra 内参初始化逻辑：
+  - `configure()` / 热更新时优先调用 `/camera/get_camera_info`
+  - 服务失败时自动 fallback 到 `horizontal_fov_deg` 近似内参
+- `PerceptionPipeline` / `pipeline_utils` 改为显式传递 `MonocularCameraIntrinsics`
+- diagnostics 增加：
+  - `intrinsics_ready`
+  - `intrinsics_source`
+  - `camera_fx / camera_fy / camera_cx / camera_cy`
+  - `position_projection_ms`
+  - `position_valid_count / position_invalid_count`
+- `perception_params.yaml` 新增并启用：
+  - `monocular.camera_info_service`
+  - `monocular.camera_height_m`
+  - `monocular.camera_pitch_deg`
+  - `monocular.camera_x_offset_m`
+  - `monocular.camera_y_offset_m`
+  - `monocular.min_downward_angle_deg`
+- 根目录新增 `try.md`，整理当前 YAML 参数的单位、作用与调参建议
+- 运行时版本字符串统一提升到 `alpha-0.1.7`
+- 各包 `package.xml` 版本统一提升到 `0.1.7`
+
+### Added
+- `smart_follower_perception/test/test_geometry_utils.cpp`
+
+### Verified
+- VM 端整库重新覆盖部署完成
+- VM 端 `smart_follower_msgs + smart_follower_perception + smart_follower_control + smart_follower_bringup` 编译通过
+- VM 端测试通过：`39 tests, 0 errors, 0 failures, 0 skipped`
 
 ## alpha-0.1.6 - 2026-03-23
 
@@ -58,7 +91,7 @@
   - `models/yolo26n_static_480x640_simplify_e2e.onnx`
   - `models/osnet_x0_5_512.onnx`
 - YOLO 输入固定到 `640x480`
-- 将消息组装与 TF 处理进一步拆分到 `pipeline_utils.*`
+- 将消息组装与 TF 处理进一步拆到 `pipeline_utils.*`
 
 ## alpha-0.1.2 - 2026-03-18
 

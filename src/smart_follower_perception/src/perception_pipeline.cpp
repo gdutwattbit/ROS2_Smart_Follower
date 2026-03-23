@@ -25,6 +25,7 @@ PerceptionPipeline::PerceptionPipeline(
   const rclcpp::Logger & logger,
   rclcpp::Clock & clock,
   PerceptionParams & params,
+  const MonocularCameraIntrinsics & intrinsics,
   PerceptionDiagnostics & stats,
   Tracker & tracker,
   LockManager & lock_manager,
@@ -33,6 +34,7 @@ PerceptionPipeline::PerceptionPipeline(
 : logger_(logger),
   clock_(clock),
   params_(params),
+  intrinsics_(intrinsics),
   stats_(stats),
   tracker_(tracker),
   lock_manager_(lock_manager),
@@ -244,6 +246,7 @@ void PerceptionPipeline::process_detection_result(
     result.image_size,
     lock_manager_.lock_id(),
     lock_manager_.lock_state(),
+    intrinsics_,
     params_.monocular,
     params_.base_frame);
   const auto message_end = Clock::now();
@@ -278,6 +281,8 @@ void PerceptionPipeline::process_detection_result(
 
   stats_.last_detection_count = detection_count;
   stats_.last_infer_ms = total_ms;
+  stats_.position_valid_count += pose_build.stats.position_success_count;
+  stats_.position_invalid_count += pose_build.stats.position_failure_count;
   stats_.profile.observe(
     result.cv_bridge_ms,
     result.yolo_ms,
@@ -285,7 +290,7 @@ void PerceptionPipeline::process_detection_result(
     recover_ms,
     tracking_ms,
     lock_ms,
-    pose_build.stats.position_estimation_ms,
+    pose_build.stats.position_projection_ms,
     pose_build.stats.message_fill_ms,
     message_ms,
     publish_ms,
@@ -298,7 +303,7 @@ void PerceptionPipeline::process_detection_result(
     logger_,
     clock_,
     5000,
-    "[%s] profile avg_ms total=%.2f cv_bridge=%.2f yolo=%.2f reid=%.2f recover=%.2f tracking=%.2f lock=%.2f position=%.2f msg_fill=%.2f message=%.2f publish=%.2f | last_ms total=%.2f yolo=%.2f reid=%.2f position=%.2f message=%.2f det=%zu tracks=%zu run_detect=%d",
+    "[%s] profile avg_ms total=%.2f cv_bridge=%.2f yolo=%.2f reid=%.2f recover=%.2f tracking=%.2f lock=%.2f projection=%.2f msg_fill=%.2f message=%.2f publish=%.2f | last_ms total=%.2f yolo=%.2f reid=%.2f projection=%.2f message=%.2f det=%zu tracks=%zu run_detect=%d",
     kRuntimeVersion,
     stats_.profile.avg(stats_.profile.sum_total_ms),
     stats_.profile.avg(stats_.profile.sum_cv_bridge_ms),
@@ -307,14 +312,14 @@ void PerceptionPipeline::process_detection_result(
     stats_.profile.avg(stats_.profile.sum_recover_ms),
     stats_.profile.avg(stats_.profile.sum_tracking_ms),
     stats_.profile.avg(stats_.profile.sum_lock_ms),
-    stats_.profile.avg(stats_.profile.sum_position_estimation_ms),
+    stats_.profile.avg(stats_.profile.sum_position_projection_ms),
     stats_.profile.avg(stats_.profile.sum_message_fill_ms),
     stats_.profile.avg(stats_.profile.sum_message_ms),
     stats_.profile.avg(stats_.profile.sum_publish_ms),
     stats_.profile.last_total_ms,
     stats_.profile.last_yolo_ms,
     stats_.profile.last_reid_ms,
-    stats_.profile.last_position_estimation_ms,
+    stats_.profile.last_position_projection_ms,
     stats_.profile.last_message_ms,
     detection_count,
     out.persons.size(),

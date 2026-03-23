@@ -18,7 +18,7 @@ struct PerceptionPipelineProfile
   double last_recover_ms{0.0};
   double last_tracking_ms{0.0};
   double last_lock_ms{0.0};
-  double last_position_estimation_ms{0.0};
+  double last_position_projection_ms{0.0};
   double last_message_fill_ms{0.0};
   double last_message_ms{0.0};
   double last_publish_ms{0.0};
@@ -37,7 +37,7 @@ struct PerceptionPipelineProfile
   double sum_recover_ms{0.0};
   double sum_tracking_ms{0.0};
   double sum_lock_ms{0.0};
-  double sum_position_estimation_ms{0.0};
+  double sum_position_projection_ms{0.0};
   double sum_message_fill_ms{0.0};
   double sum_message_ms{0.0};
   double sum_publish_ms{0.0};
@@ -51,7 +51,7 @@ struct PerceptionPipelineProfile
     double recover_ms,
     double tracking_ms,
     double lock_ms,
-    double position_estimation_ms,
+    double position_projection_ms,
     double message_fill_ms,
     double message_ms,
     double publish_ms,
@@ -72,6 +72,14 @@ struct PerceptionDiagnostics
   std::size_t skipped_synced_frame_count{0};
   std::size_t person_pose_publish_count{0};
   std::size_t last_detection_count{0};
+  std::size_t position_valid_count{0};
+  std::size_t position_invalid_count{0};
+  bool intrinsics_ready{false};
+  std::string intrinsics_source{"uninitialized"};
+  double camera_fx{0.0};
+  double camera_fy{0.0};
+  double camera_cx{0.0};
+  double camera_cy{0.0};
   int processed_frame_counter{0};
   double last_infer_ms{0.0};
   rclcpp::Time last_color_msg_stamp{0, 0, RCL_ROS_TIME};

@@ -20,7 +20,7 @@ void PerceptionPipelineProfile::observe(
   double recover_ms,
   double tracking_ms,
   double lock_ms,
-  double position_estimation_ms,
+  double position_projection_ms,
   double message_fill_ms,
   double message_ms,
   double publish_ms,
@@ -35,7 +35,7 @@ void PerceptionPipelineProfile::observe(
   last_recover_ms = recover_ms;
   last_tracking_ms = tracking_ms;
   last_lock_ms = lock_ms;
-  last_position_estimation_ms = position_estimation_ms;
+  last_position_projection_ms = position_projection_ms;
   last_message_fill_ms = message_fill_ms;
   last_message_ms = message_ms;
   last_publish_ms = publish_ms;
@@ -57,7 +57,7 @@ void PerceptionPipelineProfile::observe(
   sum_recover_ms += recover_ms;
   sum_tracking_ms += tracking_ms;
   sum_lock_ms += lock_ms;
-  sum_position_estimation_ms += position_estimation_ms;
+  sum_position_projection_ms += position_projection_ms;
   sum_message_fill_ms += message_fill_ms;
   sum_message_ms += message_ms;
   sum_publish_ms += publish_ms;
@@ -91,6 +91,14 @@ void PerceptionDiagnostics::reset()
   skipped_synced_frame_count = 0;
   person_pose_publish_count = 0;
   last_detection_count = 0;
+  position_valid_count = 0;
+  position_invalid_count = 0;
+  intrinsics_ready = false;
+  intrinsics_source = "uninitialized";
+  camera_fx = 0.0;
+  camera_fy = 0.0;
+  camera_cx = 0.0;
+  camera_cy = 0.0;
   processed_frame_counter = 0;
   last_infer_ms = 0.0;
   last_color_msg_stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
@@ -121,6 +129,9 @@ void PerceptionDiagnostics::fill_status(
 {
   const double color_age = age_seconds_or_negative(last_color_msg_stamp, now);
   const double publish_age = age_seconds_or_negative(last_person_pose_publish_stamp, now);
+  const std::size_t total_positions = position_valid_count + position_invalid_count;
+  const double invalid_ratio = total_positions > 0 ?
+    static_cast<double>(position_invalid_count) / static_cast<double>(total_positions) : 0.0;
 
   stat.add("active_tracks", static_cast<int>(active_tracks));
   stat.add("last_detection_count", static_cast<int>(last_detection_count));
@@ -133,6 +144,16 @@ void PerceptionDiagnostics::fill_status(
   stat.add("last_infer_ms", last_infer_ms);
   stat.add("last_color_age_s", color_age);
   stat.add("last_person_pose_publish_age_s", publish_age);
+  stat.add("intrinsics_ready", intrinsics_ready);
+  stat.add("intrinsics_source", intrinsics_source);
+  stat.add("camera_fx", camera_fx);
+  stat.add("camera_fy", camera_fy);
+  stat.add("camera_cx", camera_cx);
+  stat.add("camera_cy", camera_cy);
+  stat.add("position_valid_count", static_cast<int>(position_valid_count));
+  stat.add("position_invalid_count", static_cast<int>(position_invalid_count));
+  stat.add("position_invalid_ratio", invalid_ratio);
+  stat.add("position_projection_ms", profile.last_position_projection_ms);
   stat.add("profile_samples", static_cast<int>(profile.sample_count));
   stat.add("profile_detect_frames", static_cast<int>(profile.detect_frame_count));
   stat.add("profile_last_run_detect", profile.last_run_detect);
@@ -147,7 +168,7 @@ void PerceptionDiagnostics::fill_status(
   stat.add("profile_last_recover_ms", profile.last_recover_ms);
   stat.add("profile_last_tracking_ms", profile.last_tracking_ms);
   stat.add("profile_last_lock_ms", profile.last_lock_ms);
-  stat.add("profile_last_position_estimation_ms", profile.last_position_estimation_ms);
+  stat.add("profile_last_position_projection_ms", profile.last_position_projection_ms);
   stat.add("profile_last_message_fill_ms", profile.last_message_fill_ms);
   stat.add("profile_last_message_ms", profile.last_message_ms);
   stat.add("profile_last_publish_ms", profile.last_publish_ms);
@@ -158,7 +179,7 @@ void PerceptionDiagnostics::fill_status(
   stat.add("profile_avg_recover_ms", profile.avg(profile.sum_recover_ms));
   stat.add("profile_avg_tracking_ms", profile.avg(profile.sum_tracking_ms));
   stat.add("profile_avg_lock_ms", profile.avg(profile.sum_lock_ms));
-  stat.add("profile_avg_position_estimation_ms", profile.avg(profile.sum_position_estimation_ms));
+  stat.add("profile_avg_position_projection_ms", profile.avg(profile.sum_position_projection_ms));
   stat.add("profile_avg_message_fill_ms", profile.avg(profile.sum_message_fill_ms));
   stat.add("profile_avg_message_ms", profile.avg(profile.sum_message_ms));
   stat.add("profile_avg_publish_ms", profile.avg(profile.sum_publish_ms));
@@ -186,6 +207,12 @@ void PerceptionDiagnostics::fill_status(
     raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "ReID runtime not ready");
   }
 
+  if (!intrinsics_ready) {
+    raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Waiting for camera intrinsics");
+  } else if (intrinsics_source != "service") {
+    raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Using fallback camera intrinsics");
+  }
+
   if (raw_color_count == 0 || color_age < 0.0) {
     raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Waiting for color input");
   } else if (color_age > 2.0) {
@@ -202,6 +229,10 @@ void PerceptionDiagnostics::fill_status(
     raise(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "person_pose publish stalled");
   } else if (publish_age > 0.5) {
     raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "person_pose publish delayed");
+  }
+
+  if (total_positions >= 10 && invalid_ratio > 0.8) {
+    raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Ground projection failing frequently");
   }
 
   stat.summary(level, message);

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+﻿cmake_minimum_required(VERSION 3.8)
 project(smart_follower_perception)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -21,6 +21,7 @@ find_package(diagnostic_msgs REQUIRED)
 find_package(smart_follower_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(astra_camera_msgs QUIET)
 
 set(SMART_FOLLOWER_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party")
 
@@ -106,6 +107,11 @@ target_link_libraries(perception_node
   Eigen3::Eigen
 )
 
+if(astra_camera_msgs_FOUND)
+  target_compile_definitions(perception_node PRIVATE HAVE_ASTRA_CAMERA_MSGS=1)
+  ament_target_dependencies(perception_node astra_camera_msgs)
+endif()
+
 if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
   set_target_properties(perception_node PROPERTIES
     BUILD_RPATH ${ONNXRUNTIME_LIBRARY_DIR}
@@ -158,6 +164,13 @@ if(BUILD_TESTING)
     target_include_directories(test_frame_sync PRIVATE include)
     ament_target_dependencies(test_frame_sync rclcpp sensor_msgs)
     target_link_libraries(test_frame_sync smart_follower_perception_core)
+  endif()
+
+  ament_add_gtest(test_geometry_utils test/test_geometry_utils.cpp)
+  if(TARGET test_geometry_utils)
+    target_include_directories(test_geometry_utils PRIVATE include)
+    ament_target_dependencies(test_geometry_utils geometry_msgs)
+    target_link_libraries(test_geometry_utils smart_follower_perception_core)
   endif()
 
   ament_add_gtest(test_lock_manager test/test_lock_manager.cpp)

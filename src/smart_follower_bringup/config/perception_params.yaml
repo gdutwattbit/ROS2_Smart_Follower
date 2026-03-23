@@ -1,4 +1,4 @@
-/**:
+﻿/**:
   ros__parameters:
     color_topic: /camera/color/image_raw
     person_pose_topic: person_pose
@@ -46,12 +46,16 @@
         appearance: 0.4
 
     monocular:
+      camera_info_service: /camera/get_camera_info
       person_height_m: 1.70
       horizontal_fov_deg: 69.0
       min_range_m: 0.60
       max_range_m: 6.00
+      camera_height_m: 0.28
+      camera_pitch_deg: 18.0
       camera_x_offset_m: 0.00
       camera_y_offset_m: 0.00
+      min_downward_angle_deg: 2.0
 
     lock:
       stable_frames: 5

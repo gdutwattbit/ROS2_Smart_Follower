@@ -80,6 +80,7 @@ bool run_detection_work_item(
 smart_follower_msgs::msg::TrackedPerson track_to_message(
   const Track & track,
   const cv::Size & image_size,
+  const MonocularCameraIntrinsics & intrinsics,
   const MonocularPositionConfig & monocular,
   MessageBuildStats * stats)
 {
@@ -87,6 +88,8 @@ smart_follower_msgs::msg::TrackedPerson track_to_message(
   const auto elapsed_ms = [](const SteadyClock::time_point & begin, const SteadyClock::time_point & end) {
     return std::chrono::duration<double, std::milli>(end - begin).count();
   };
+
+  (void)image_size;
 
   smart_follower_msgs::msg::TrackedPerson msg;
   msg.track_id = track.id;
@@ -98,10 +101,10 @@ smart_follower_msgs::msg::TrackedPerson track_to_message(
   msg.bbox.height = static_cast<uint32_t>(std::max(0.0F, track.bbox.height));
 
   const auto position_begin = SteadyClock::now();
-  auto position = estimate_person_position_from_bbox(track.bbox, image_size, monocular);
+  auto position = estimate_person_position_from_bbox(track.bbox, intrinsics, monocular);
   const auto position_end = SteadyClock::now();
   if (stats != nullptr) {
-    stats->position_estimation_ms += elapsed_ms(position_begin, position_end);
+    stats->position_projection_ms += elapsed_ms(position_begin, position_end);
   }
 
   if (position.has_value()) {
@@ -136,6 +139,7 @@ PersonPoseBuildResult build_person_pose_array(
   const cv::Size & image_size,
   int lock_id,
   uint8_t lock_state,
+  const MonocularCameraIntrinsics & intrinsics,
   const MonocularPositionConfig & monocular,
   const std::string & base_frame)
 {
@@ -154,7 +158,7 @@ PersonPoseBuildResult build_person_pose_array(
 
   const auto message_fill_begin = SteadyClock::now();
   for (const auto & kv : tracks) {
-    out.persons.push_back(track_to_message(kv.second, image_size, monocular, &result.stats));
+    out.persons.push_back(track_to_message(kv.second, image_size, intrinsics, monocular, &result.stats));
   }
   const auto message_fill_end = SteadyClock::now();
   result.stats.message_fill_ms = elapsed_ms(message_fill_begin, message_fill_end);

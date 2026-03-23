@@ -54,7 +54,7 @@ struct DetectionWorkResult
 
 struct MessageBuildStats
 {
-  double position_estimation_ms{0.0};
+  double position_projection_ms{0.0};
   double message_fill_ms{0.0};
   std::size_t position_success_count{0};
   std::size_t position_failure_count{0};
@@ -77,6 +77,7 @@ bool run_detection_work_item(
 smart_follower_msgs::msg::TrackedPerson track_to_message(
   const Track & track,
   const cv::Size & image_size,
+  const MonocularCameraIntrinsics & intrinsics,
   const MonocularPositionConfig & monocular,
   MessageBuildStats * stats);
 
@@ -86,6 +87,7 @@ PersonPoseBuildResult build_person_pose_array(
   const cv::Size & image_size,
   int lock_id,
   uint8_t lock_state,
+  const MonocularCameraIntrinsics & intrinsics,
   const MonocularPositionConfig & monocular,
   const std::string & base_frame);
 
