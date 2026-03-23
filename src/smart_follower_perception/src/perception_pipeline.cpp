@@ -29,9 +29,7 @@ PerceptionPipeline::PerceptionPipeline(
   Tracker & tracker,
   LockManager & lock_manager,
   YoloDetector & yolo,
-  ReidExtractor & reid,
-  image_geometry::PinholeCameraModel & camera_model,
-  tf2_ros::Buffer & tf_buffer)
+  ReidExtractor & reid)
 : logger_(logger),
   clock_(clock),
   params_(params),
@@ -39,9 +37,7 @@ PerceptionPipeline::PerceptionPipeline(
   tracker_(tracker),
   lock_manager_(lock_manager),
   yolo_(yolo),
-  reid_(reid),
-  camera_model_(camera_model),
-  tf_buffer_(tf_buffer)
+  reid_(reid)
 {
 }
 
@@ -52,31 +48,21 @@ PerceptionPipeline::~PerceptionPipeline()
 
 bool PerceptionPipeline::enqueue_synchronized_frame(const SynchronizedFrame & synced_frame, bool active)
 {
-  if (!active) {
-    return false;
-  }
-  if (!synced_frame.color || !synced_frame.depth || !synced_frame.info) {
+  if (!active || !synced_frame.color) {
     return false;
   }
 
-  if (!is_sync_pair_within_slop(synced_frame.color, synced_frame.depth, params_.sync_slop)) {
-    stats_.dropped_sync_frames_extra += 1;
-    return false;
-  }
-
-  stats_.synced_callback_count += 1;
-  stats_.synced_frame_counter += 1;
-  const bool run_pipeline = (stats_.synced_frame_counter % params_.process_every_n_frames == 0);
+  stats_.queued_color_count += 1;
+  const bool run_pipeline = (stats_.queued_color_count % params_.process_every_n_frames == 0);
   if (!run_pipeline) {
     stats_.skipped_synced_frame_count += 1;
     RCLCPP_INFO_THROTTLE(
       logger_,
       clock_,
       2000,
-      "[%s] sync callback synced=%zu synced_frame=%d processed=%d run_pipeline=0",
+      "[%s] color callback queued=%zu processed=%d run_pipeline=0",
       kRuntimeVersion,
-      stats_.synced_callback_count,
-      stats_.synced_frame_counter,
+      stats_.queued_color_count,
       stats_.processed_frame_counter);
     return false;
   }
@@ -87,10 +73,9 @@ bool PerceptionPipeline::enqueue_synchronized_frame(const SynchronizedFrame & sy
     logger_,
     clock_,
     2000,
-    "[%s] sync callback synced=%zu synced_frame=%d scheduled=%d processed=%d run_pipeline=1 run_detect=%d",
+    "[%s] color callback queued=%zu scheduled=%d processed=%d run_pipeline=1 run_detect=%d",
     kRuntimeVersion,
-    stats_.synced_callback_count,
-    stats_.synced_frame_counter,
+    stats_.queued_color_count,
     scheduled_frame_counter_,
     stats_.processed_frame_counter,
     run_detect ? 1 : 0);
@@ -192,8 +177,6 @@ void PerceptionPipeline::detection_worker_loop()
       item,
       yolo_,
       reid_,
-      params_.depth_min_m,
-      params_.depth_max_m,
       result,
       logger_,
       clock_);
@@ -212,20 +195,11 @@ void PerceptionPipeline::process_detection_result(
   const std::function<rclcpp::Time()> & now_fn,
   const std::function<void()> & diagnostics_force_update)
 {
-  if (!result.camera_info) {
-    return;
-  }
-
   stats_.processed_frame_counter += 1;
 
   if (!result.reid_dim_error.empty()) {
     RCLCPP_ERROR_THROTTLE(logger_, clock_, 2000, "%s", result.reid_dim_error.c_str());
   }
-
-  const auto camera_info_begin = Clock::now();
-  camera_model_.fromCameraInfo(*result.camera_info);
-  const auto camera_info_end = Clock::now();
-  const double camera_info_ms = elapsed_ms(camera_info_begin, camera_info_end);
 
   double recover_ms = 0.0;
   for (auto & detection : result.detections) {
@@ -267,16 +241,11 @@ void PerceptionPipeline::process_detection_result(
   auto pose_build = build_person_pose_array(
     tracker_.tracks(),
     result.color_header,
-    result.depth_header,
+    result.image_size,
     lock_manager_.lock_id(),
     lock_manager_.lock_state(),
-    camera_model_,
-    tf_buffer_,
-    params_.base_frame,
-    params_.depth_min_m,
-    params_.depth_max_m,
-    logger_,
-    clock_);
+    params_.monocular,
+    params_.base_frame);
   const auto message_end = Clock::now();
   auto & out = pose_build.msg;
 
@@ -310,16 +279,13 @@ void PerceptionPipeline::process_detection_result(
   stats_.last_detection_count = detection_count;
   stats_.last_infer_ms = total_ms;
   stats_.profile.observe(
-    camera_info_ms,
     result.cv_bridge_ms,
     result.yolo_ms,
-    result.depth_ms,
     result.reid_ms,
     recover_ms,
     tracking_ms,
     lock_ms,
-    pose_build.stats.tf_lookup_ms,
-    pose_build.stats.tf_transform_ms,
+    pose_build.stats.position_estimation_ms,
     pose_build.stats.message_fill_ms,
     message_ms,
     publish_ms,
@@ -332,27 +298,23 @@ void PerceptionPipeline::process_detection_result(
     logger_,
     clock_,
     5000,
-    "[%s] profile avg_ms total=%.2f camera_info=%.2f cv_bridge=%.2f yolo=%.2f depth=%.2f reid=%.2f recover=%.2f tracking=%.2f lock=%.2f tf_lookup=%.2f tf_transform=%.2f msg_fill=%.2f message=%.2f publish=%.2f | last_ms total=%.2f yolo=%.2f reid=%.2f tf_lookup=%.2f tf_transform=%.2f message=%.2f det=%zu tracks=%zu run_detect=%d",
+    "[%s] profile avg_ms total=%.2f cv_bridge=%.2f yolo=%.2f reid=%.2f recover=%.2f tracking=%.2f lock=%.2f position=%.2f msg_fill=%.2f message=%.2f publish=%.2f | last_ms total=%.2f yolo=%.2f reid=%.2f position=%.2f message=%.2f det=%zu tracks=%zu run_detect=%d",
     kRuntimeVersion,
     stats_.profile.avg(stats_.profile.sum_total_ms),
-    stats_.profile.avg(stats_.profile.sum_camera_info_ms),
     stats_.profile.avg(stats_.profile.sum_cv_bridge_ms),
     stats_.profile.avg(stats_.profile.sum_yolo_ms),
-    stats_.profile.avg(stats_.profile.sum_depth_ms),
     stats_.profile.avg(stats_.profile.sum_reid_ms),
     stats_.profile.avg(stats_.profile.sum_recover_ms),
     stats_.profile.avg(stats_.profile.sum_tracking_ms),
     stats_.profile.avg(stats_.profile.sum_lock_ms),
-    stats_.profile.avg(stats_.profile.sum_tf_lookup_ms),
-    stats_.profile.avg(stats_.profile.sum_tf_transform_ms),
+    stats_.profile.avg(stats_.profile.sum_position_estimation_ms),
     stats_.profile.avg(stats_.profile.sum_message_fill_ms),
     stats_.profile.avg(stats_.profile.sum_message_ms),
     stats_.profile.avg(stats_.profile.sum_publish_ms),
     stats_.profile.last_total_ms,
     stats_.profile.last_yolo_ms,
     stats_.profile.last_reid_ms,
-    stats_.profile.last_tf_lookup_ms,
-    stats_.profile.last_tf_transform_ms,
+    stats_.profile.last_position_estimation_ms,
     stats_.profile.last_message_ms,
     detection_count,
     out.persons.size(),

@@ -1,4 +1,3 @@
-#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -8,7 +7,6 @@
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
-#include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/range.hpp>
 
 #include "smart_follower_control/control_node_common.hpp"
@@ -29,7 +27,6 @@ public:
   {
     declare_parameter("left_range_topic", std::string("left_ultrasonic/range"));
     declare_parameter("right_range_topic", std::string("right_ultrasonic/range"));
-    declare_parameter("depth_topic", std::string("/camera/depth/image_raw"));
     declare_parameter("cmd_vel_input_topic", std::string("/cmd_vel"));
     declare_parameter("cmd_vel_avoid_topic", std::string("cmd_vel_avoid"));
     declare_parameter("rate", 20.0);
@@ -38,10 +35,6 @@ public:
     declare_parameter("a_brake", 0.8);
     declare_parameter("margin", 0.08);
     declare_parameter("exit_margin", 0.08);
-    declare_parameter("depth_roi_width_ratio", 0.4);
-    declare_parameter("depth_roi_height_ratio", 0.35);
-    declare_parameter("depth_percentile", 0.05);
-    declare_parameter("depth_sample_stride", 2);
     declare_parameter("turn_speed", 0.5);
     declare_parameter("slow_turn_speed", 0.25);
     declare_parameter("back_speed", -0.15);
@@ -52,7 +45,6 @@ private:
   {
     std::string left_topic{"left_ultrasonic/range"};
     std::string right_topic{"right_ultrasonic/range"};
-    std::string depth_topic{"/camera/depth/image_raw"};
     std::string cmd_vel_input_topic{"/cmd_vel"};
     std::string cmd_vel_avoid_topic{"cmd_vel_avoid"};
     double rate{20.0};
@@ -62,7 +54,6 @@ private:
   OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
   rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr left_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr right_sub_;
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr depth_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr vel_sub_;
   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::Twist>::SharedPtr avoid_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -73,7 +64,6 @@ private:
   {
     p_.left_topic = get_parameter("left_range_topic").as_string();
     p_.right_topic = get_parameter("right_range_topic").as_string();
-    p_.depth_topic = get_parameter("depth_topic").as_string();
     p_.cmd_vel_input_topic = get_parameter("cmd_vel_input_topic").as_string();
     p_.cmd_vel_avoid_topic = get_parameter("cmd_vel_avoid_topic").as_string();
     p_.rate = get_parameter("rate").as_double();
@@ -82,10 +72,6 @@ private:
     p_.runtime.a_brake = get_parameter("a_brake").as_double();
     p_.runtime.margin = get_parameter("margin").as_double();
     p_.runtime.exit_margin = get_parameter("exit_margin").as_double();
-    p_.runtime.depth_roi_width_ratio = get_parameter("depth_roi_width_ratio").as_double();
-    p_.runtime.depth_roi_height_ratio = get_parameter("depth_roi_height_ratio").as_double();
-    p_.runtime.depth_percentile = get_parameter("depth_percentile").as_double();
-    p_.runtime.depth_sample_stride = clamp_int_min(static_cast<int>(get_parameter("depth_sample_stride").as_int()), 1);
     p_.runtime.turn_speed = get_parameter("turn_speed").as_double();
     p_.runtime.slow_turn_speed = get_parameter("slow_turn_speed").as_double();
     p_.runtime.back_speed = get_parameter("back_speed").as_double();
@@ -100,7 +86,6 @@ private:
     timer_.reset();
     left_sub_.reset();
     right_sub_.reset();
-    depth_sub_.reset();
     vel_sub_.reset();
     avoid_pub_.reset();
     runtime_.clear();
@@ -121,10 +106,6 @@ private:
           runtime_.on_right_range(msg->range, rclcpp::Time(msg->header.stamp));
         }
       });
-    depth_sub_ = create_subscription<sensor_msgs::msg::Image>(
-      p_.depth_topic,
-      rclcpp::SensorDataQoS(),
-      [this](const sensor_msgs::msg::Image::SharedPtr msg) { runtime_.on_depth(msg); });
     vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
       p_.cmd_vel_input_topic,
       10,
@@ -170,7 +151,6 @@ private:
     timer_.reset();
     left_sub_.reset();
     right_sub_.reset();
-    depth_sub_.reset();
     vel_sub_.reset();
     avoid_pub_.reset();
     param_callback_handle_.reset();
@@ -183,7 +163,6 @@ private:
     const auto & name = param.get_name();
     if (name == "left_range_topic") target.left_topic = param.as_string();
     else if (name == "right_range_topic") target.right_topic = param.as_string();
-    else if (name == "depth_topic") target.depth_topic = param.as_string();
     else if (name == "cmd_vel_input_topic") target.cmd_vel_input_topic = param.as_string();
     else if (name == "cmd_vel_avoid_topic") target.cmd_vel_avoid_topic = param.as_string();
     else if (name == "rate") target.rate = param.as_double();
@@ -192,10 +171,6 @@ private:
     else if (name == "a_brake") target.runtime.a_brake = param.as_double();
     else if (name == "margin") target.runtime.margin = param.as_double();
     else if (name == "exit_margin") target.runtime.exit_margin = param.as_double();
-    else if (name == "depth_roi_width_ratio") target.runtime.depth_roi_width_ratio = param.as_double();
-    else if (name == "depth_roi_height_ratio") target.runtime.depth_roi_height_ratio = param.as_double();
-    else if (name == "depth_percentile") target.runtime.depth_percentile = param.as_double();
-    else if (name == "depth_sample_stride") target.runtime.depth_sample_stride = static_cast<int>(param.as_int());
     else if (name == "turn_speed") target.runtime.turn_speed = param.as_double();
     else if (name == "slow_turn_speed") target.runtime.slow_turn_speed = param.as_double();
     else if (name == "back_speed") target.runtime.back_speed = param.as_double();
@@ -210,10 +185,6 @@ private:
 
     candidate.rate = clamp_rate_hz(candidate.rate);
     candidate.runtime.a_brake = clamp_positive(candidate.runtime.a_brake, 1e-3);
-    candidate.runtime.depth_roi_width_ratio = std::clamp(candidate.runtime.depth_roi_width_ratio, 0.05, 1.0);
-    candidate.runtime.depth_roi_height_ratio = std::clamp(candidate.runtime.depth_roi_height_ratio, 0.05, 1.0);
-    candidate.runtime.depth_percentile = std::clamp(candidate.runtime.depth_percentile, 0.0, 1.0);
-    candidate.runtime.depth_sample_stride = clamp_int_min(candidate.runtime.depth_sample_stride, 1);
 
     p_ = candidate;
     runtime_.set_config(p_.runtime);
@@ -221,14 +192,12 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "[%s] avoidance parameters hot-reloaded: left=%s right=%s depth=%s cmd=%s rate=%.2f stride=%d",
+      "[%s] avoidance parameters hot-reloaded: left=%s right=%s cmd=%s rate=%.2f",
       kRuntimeVersion,
       p_.left_topic.c_str(),
       p_.right_topic.c_str(),
-      p_.depth_topic.c_str(),
       p_.cmd_vel_avoid_topic.c_str(),
-      p_.rate,
-      p_.runtime.depth_sample_stride);
+      p_.rate);
 
     return make_ok_result();
   }
@@ -254,27 +223,21 @@ private:
     const auto snapshot = runtime_.snapshot(now());
     stat.add("left_dist", snapshot.left_dist);
     stat.add("right_dist", snapshot.right_dist);
-    stat.add("depth_dist", snapshot.depth_dist);
     stat.add("left_age_s", snapshot.left_age_s);
     stat.add("right_age_s", snapshot.right_age_s);
-    stat.add("depth_age_s", snapshot.depth_age_s);
-    stat.add("depth_message_count", snapshot.depth_message_count);
-    stat.add("depth_process_count", snapshot.depth_process_count);
-    stat.add("depth_sample_stride", snapshot.depth_sample_stride);
     stat.add("current_speed", snapshot.current_speed);
 
     const bool left_stale = snapshot.left_age_s < 0.0 || snapshot.left_age_s > 1.0;
     const bool right_stale = snapshot.right_age_s < 0.0 || snapshot.right_age_s > 1.0;
-    const bool depth_stale = snapshot.depth_age_s < 0.0 || snapshot.depth_age_s > 1.0 || snapshot.depth_process_count == 0;
 
     int level = diagnostic_msgs::msg::DiagnosticStatus::OK;
     std::string message = "Obstacle avoidance active";
-    if (left_stale && right_stale && depth_stale) {
+    if (left_stale && right_stale) {
       level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
-      message = "Obstacle inputs unavailable";
-    } else if (left_stale || right_stale || depth_stale || snapshot.depth_message_count == 0) {
+      message = "Ultrasonic inputs unavailable";
+    } else if (left_stale || right_stale) {
       level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
-      message = "Obstacle inputs degraded";
+      message = "Ultrasonic inputs degraded";
     }
     stat.summary(level, message);
   }

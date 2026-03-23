@@ -31,8 +31,6 @@ struct Track
   float confidence{0.0F};
   cv::KalmanFilter kf;
   cv::Rect2f bbox;
-  float depth_m{0.0F};
-  int invalid_depth_frames{0};
   int hit_count{0};
   int miss_count{0};
   rclcpp::Time first_seen{0, 0, RCL_ROS_TIME};
@@ -48,7 +46,6 @@ struct CostWeights
 {
   double w_iou{0.3};
   double w_center{0.2};
-  double w_depth{0.1};
   double w_appearance{0.4};
 };
 
@@ -62,10 +59,6 @@ struct TrackerConfig
   float high_score_threshold{0.5F};
   float assignment_threshold{0.7F};
   float second_stage_threshold{0.8F};
-  float depth_gate_m{1.0F};
-  float depth_norm_m{2.0F};
-  float depth_min_m{0.2F};
-  float depth_max_m{4.0F};
   float ema_alpha{0.2F};
   float reid_recover_threshold{0.70F};
   CostWeights weights;

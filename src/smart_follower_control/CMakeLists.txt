@@ -14,12 +14,10 @@ find_package(rclcpp_lifecycle REQUIRED)
 find_package(lifecycle_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(cv_bridge REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(diagnostic_updater REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(smart_follower_msgs REQUIRED)
-find_package(OpenCV REQUIRED)
 
 set(SMART_FOLLOWER_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party")
 set(LIBGPIOD_HINTS
@@ -44,7 +42,6 @@ set(common_deps
   lifecycle_msgs
   geometry_msgs
   sensor_msgs
-  cv_bridge
   std_msgs
   diagnostic_updater
   diagnostic_msgs
@@ -65,7 +62,6 @@ ament_target_dependencies(smart_follower_control_core
   geometry_msgs
   sensor_msgs
   smart_follower_msgs
-  cv_bridge
 )
 target_include_directories(smart_follower_control_core PUBLIC include ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(smart_follower_control_core ${OpenCV_LIBS})
@@ -131,7 +127,6 @@ if(BUILD_TESTING)
   ament_lint_cmake()
   ament_xmllint()
 
-
   ament_add_gtest(test_arbiter_sm test/test_arbiter_sm.cpp)
   if(TARGET test_arbiter_sm)
     target_include_directories(test_arbiter_sm PRIVATE include)
@@ -154,7 +149,7 @@ if(BUILD_TESTING)
   ament_add_gtest(test_obstacle_runtime test/test_obstacle_runtime.cpp)
   if(TARGET test_obstacle_runtime)
     target_include_directories(test_obstacle_runtime PRIVATE include)
-    ament_target_dependencies(test_obstacle_runtime rclcpp geometry_msgs sensor_msgs cv_bridge)
+    ament_target_dependencies(test_obstacle_runtime rclcpp geometry_msgs)
     target_link_libraries(test_obstacle_runtime smart_follower_control_core)
   endif()
 endif()

@@ -5,6 +5,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 
+#include "smart_follower_perception/geometry_utils.hpp"
 #include "smart_follower_perception/runtime.hpp"
 #include "smart_follower_perception/tracker.hpp"
 
@@ -14,8 +15,6 @@ namespace smart_follower_perception
 struct PerceptionParams
 {
   std::string color_topic{"/camera/color/image_raw"};
-  std::string depth_topic{"/camera/depth/image_raw"};
-  std::string camera_info_topic{"/camera/color/camera_info"};
   std::string person_pose_topic{"person_pose"};
   std::string follow_command_topic{"follow_command"};
   std::string base_frame{"base_footprint"};
@@ -32,15 +31,10 @@ struct PerceptionParams
   float lock_hold_sec{0.6F};
   float lock_switch_sec{2.0F};
   float memory_sec{30.0F};
-  float sync_slop{0.04F};
   float low_score_threshold{0.1F};
   float high_score_threshold{0.5F};
   float assignment_threshold{0.7F};
   float second_stage_threshold{0.8F};
-  float depth_gate_m{1.0F};
-  float depth_norm_m{2.0F};
-  float depth_min_m{0.2F};
-  float depth_max_m{4.0F};
   float ema_alpha{0.2F};
   float reid_recover_threshold{0.70F};
   float lock_center_roi_ratio{0.6F};
@@ -54,6 +48,7 @@ struct PerceptionParams
   OrtRuntimeConfig yolo_ort{3, 1, false};
   OrtRuntimeConfig reid_ort{1, 1, false};
   CostWeights weights;
+  MonocularPositionConfig monocular;
 };
 
 void declare_parameters(rclcpp_lifecycle::LifecycleNode & node, const PerceptionParams & defaults);

@@ -17,7 +17,6 @@ struct Detection
 {
   cv::Rect2f bbox;
   float confidence{0.0F};
-  float depth_m{0.0F};
   std::array<float, 2048> feature{};
   bool feature_valid{false};
   int recovered_track_id{-1};

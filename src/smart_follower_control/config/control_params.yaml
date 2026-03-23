@@ -33,7 +33,6 @@ obstacle_avoidance_node:
   ros__parameters:
     left_range_topic: left_ultrasonic/range
     right_range_topic: right_ultrasonic/range
-    depth_topic: /camera/depth/image_raw
     cmd_vel_input_topic: /cmd_vel
     cmd_vel_avoid_topic: cmd_vel_avoid
     rate: 20.0
@@ -42,10 +41,6 @@ obstacle_avoidance_node:
     a_brake: 0.8
     margin: 0.08
     exit_margin: 0.08
-    depth_roi_width_ratio: 0.40
-    depth_roi_height_ratio: 0.35
-    depth_percentile: 0.05
-    depth_sample_stride: 2
     turn_speed: 0.5
     slow_turn_speed: 0.25
     back_speed: -0.15

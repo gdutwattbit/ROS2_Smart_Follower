@@ -6,11 +6,9 @@
 #include <optional>
 #include <thread>
 
-#include <image_geometry/pinhole_camera_model.h>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <smart_follower_msgs/msg/person_pose_array.hpp>
-#include <tf2_ros/buffer.h>
 
 #include "smart_follower_perception/lock_manager.hpp"
 #include "smart_follower_perception/perception_diagnostics.hpp"
@@ -36,9 +34,7 @@ public:
     Tracker & tracker,
     LockManager & lock_manager,
     YoloDetector & yolo,
-    ReidExtractor & reid,
-    image_geometry::PinholeCameraModel & camera_model,
-    tf2_ros::Buffer & tf_buffer);
+    ReidExtractor & reid);
 
   ~PerceptionPipeline();
 
@@ -67,8 +63,6 @@ private:
   LockManager & lock_manager_;
   YoloDetector & yolo_;
   ReidExtractor & reid_;
-  image_geometry::PinholeCameraModel & camera_model_;
-  tf2_ros::Buffer & tf_buffer_;
 
   std::mutex worker_mutex_;
   std::condition_variable worker_cv_;

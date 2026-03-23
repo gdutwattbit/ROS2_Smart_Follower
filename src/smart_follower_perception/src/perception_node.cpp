@@ -6,18 +6,14 @@
 #include <vector>
 
 #include <diagnostic_updater/diagnostic_updater.hpp>
-#include <image_geometry/pinhole_camera_model.h>
 #include <lifecycle_msgs/msg/state.hpp>
 #include <lifecycle_msgs/msg/transition.hpp>
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
-#include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <smart_follower_msgs/msg/follow_command.hpp>
 #include <smart_follower_msgs/msg/person_pose_array.hpp>
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_listener.h>
 
 #include "smart_follower_perception/constants.hpp"
 #include "smart_follower_perception/frame_sync.hpp"
@@ -36,12 +32,9 @@ class PerceptionNode : public rclcpp_lifecycle::LifecycleNode
 public:
   using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
   using Image = sensor_msgs::msg::Image;
-  using CameraInfo = sensor_msgs::msg::CameraInfo;
 
   PerceptionNode()
   : rclcpp_lifecycle::LifecycleNode("perception_node"),
-    tf_buffer_(this->get_clock()),
-    tf_listener_(tf_buffer_),
     diagnostics_(this),
     pipeline_(
       get_logger(),
@@ -51,9 +44,7 @@ public:
       tracker_,
       lock_manager_,
       yolo_,
-      reid_,
-      camera_model_,
-      tf_buffer_)
+      reid_)
   {
     ::smart_follower_perception::declare_parameters(*this, params_);
   }
@@ -70,10 +61,6 @@ private:
     tracker_config.high_score_threshold = params_.high_score_threshold;
     tracker_config.assignment_threshold = params_.assignment_threshold;
     tracker_config.second_stage_threshold = params_.second_stage_threshold;
-    tracker_config.depth_gate_m = params_.depth_gate_m;
-    tracker_config.depth_norm_m = params_.depth_norm_m;
-    tracker_config.depth_min_m = params_.depth_min_m;
-    tracker_config.depth_max_m = params_.depth_max_m;
     tracker_config.ema_alpha = params_.ema_alpha;
     tracker_config.reid_recover_threshold = params_.reid_recover_threshold;
     tracker_config.weights = params_.weights;
@@ -87,7 +74,7 @@ private:
     lock_config.target_area_ratio = params_.lock_target_area_ratio;
     lock_manager_.configure(lock_config);
 
-    frame_sync_.configure(params_.sync_slop, params_.sync_cache_size);
+    frame_sync_.configure(params_.sync_cache_size);
   }
 
   void configure_models()
@@ -116,8 +103,6 @@ private:
     }
 
     color_sub_.reset();
-    depth_sub_.reset();
-    info_sub_.reset();
     command_sub_.reset();
     person_pub_.reset();
     frame_sync_.clear();
@@ -135,14 +120,6 @@ private:
       params_.color_topic,
       rclcpp::SensorDataQoS(),
       std::bind(&PerceptionNode::on_color_message, this, std::placeholders::_1));
-    depth_sub_ = this->create_subscription<Image>(
-      params_.depth_topic,
-      rclcpp::SensorDataQoS(),
-      std::bind(&PerceptionNode::on_depth_message, this, std::placeholders::_1));
-    info_sub_ = this->create_subscription<CameraInfo>(
-      params_.camera_info_topic,
-      rclcpp::SensorDataQoS(),
-      std::bind(&PerceptionNode::on_info_message, this, std::placeholders::_1));
 
     if (was_active) {
       person_pub_->on_activate();
@@ -155,17 +132,11 @@ private:
       get_logger(),
       *get_clock(),
       2000,
-      "[%s] raw_input color=%zu depth=%zu info=%zu cache=(%zu,%zu,%zu) last_stamp=(%.3f, %.3f, %.3f)",
+      "[%s] raw_input color=%zu cache=%zu last_stamp=%.3f",
       kRuntimeVersion,
       stats_.raw_color_count,
-      stats_.raw_depth_count,
-      stats_.raw_info_count,
       frame_sync_.color_size(),
-      frame_sync_.depth_size(),
-      frame_sync_.info_size(),
-      PerceptionDiagnostics::stamp_seconds_or_negative(stats_.last_color_msg_stamp),
-      PerceptionDiagnostics::stamp_seconds_or_negative(stats_.last_depth_msg_stamp),
-      PerceptionDiagnostics::stamp_seconds_or_negative(stats_.last_info_msg_stamp));
+      PerceptionDiagnostics::stamp_seconds_or_negative(stats_.last_color_msg_stamp));
   }
 
   void try_process_cached_frames()
@@ -175,10 +146,10 @@ private:
       return;
     }
 
-    FrameSynchronizer::Triplet triplet;
-    while (frame_sync_.pop_next(triplet)) {
+    FrameSynchronizer::Frame frame;
+    while (frame_sync_.pop_next(frame)) {
       pipeline_.enqueue_synchronized_frame(
-        SynchronizedFrame{triplet.color, triplet.depth, triplet.info},
+        SynchronizedFrame{frame.color},
         this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
     }
   }
@@ -191,30 +162,6 @@ private:
     stats_.raw_color_count += 1;
     stats_.last_color_msg_stamp = rclcpp::Time(msg->header.stamp);
     frame_sync_.push_color(msg);
-    log_raw_input_status();
-    try_process_cached_frames();
-  }
-
-  void on_depth_message(const Image::SharedPtr msg)
-  {
-    if (!msg) {
-      return;
-    }
-    stats_.raw_depth_count += 1;
-    stats_.last_depth_msg_stamp = rclcpp::Time(msg->header.stamp);
-    frame_sync_.push_depth(msg);
-    log_raw_input_status();
-    try_process_cached_frames();
-  }
-
-  void on_info_message(const CameraInfo::SharedPtr msg)
-  {
-    if (!msg) {
-      return;
-    }
-    stats_.raw_info_count += 1;
-    stats_.last_info_msg_stamp = rclcpp::Time(msg->header.stamp);
-    frame_sync_.push_info(msg);
     log_raw_input_status();
     try_process_cached_frames();
   }
@@ -282,15 +229,16 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "[%s] parameters hot-reloaded: color=%s depth=%s info=%s person_pose=%s yolo=%s reid=%s sync_slop=%.3f yolo_ort=(intra=%d inter=%d mode=%s) reid_ort=(intra=%d inter=%d mode=%s)",
+      "[%s] parameters hot-reloaded: color=%s person_pose=%s yolo=%s reid=%s mono=(height=%.2f hfov=%.1f min=%.2f max=%.2f) yolo_ort=(intra=%d inter=%d mode=%s) reid_ort=(intra=%d inter=%d mode=%s)",
       kRuntimeVersion,
       params_.color_topic.c_str(),
-      params_.depth_topic.c_str(),
-      params_.camera_info_topic.c_str(),
       params_.person_pose_topic.c_str(),
       params_.yolo_model_path.c_str(),
       params_.reid_model_path.c_str(),
-      params_.sync_slop,
+      params_.monocular.person_height_m,
+      params_.monocular.horizontal_fov_deg,
+      params_.monocular.min_range_m,
+      params_.monocular.max_range_m,
       params_.yolo_ort.intra_op_num_threads,
       params_.yolo_ort.inter_op_num_threads,
       params_.yolo_ort.execution_mode_parallel ? "parallel" : "sequential",
@@ -350,14 +298,15 @@ private:
       params_.reid_ort.execution_mode_parallel ? "parallel" : "sequential");
     RCLCPP_INFO(
       get_logger(),
-      "[%s] input topics color=%s depth=%s info=%s person_pose=%s sync_slop=%.3f cache_size=%d",
+      "[%s] input topic color=%s person_pose=%s cache_size=%d mono=(height=%.2f hfov=%.1f min=%.2f max=%.2f)",
       kRuntimeVersion,
       params_.color_topic.c_str(),
-      params_.depth_topic.c_str(),
-      params_.camera_info_topic.c_str(),
       params_.person_pose_topic.c_str(),
-      params_.sync_slop,
-      params_.sync_cache_size);
+      params_.sync_cache_size,
+      params_.monocular.person_height_m,
+      params_.monocular.horizontal_fov_deg,
+      params_.monocular.min_range_m,
+      params_.monocular.max_range_m);
     return CallbackReturn::SUCCESS;
   }
 
@@ -396,8 +345,6 @@ private:
     pipeline_.stop_detection_worker();
     pipeline_.clear_async_state();
     color_sub_.reset();
-    depth_sub_.reset();
-    info_sub_.reset();
     command_sub_.reset();
     person_pub_.reset();
     frame_sync_.reset();
@@ -414,17 +361,12 @@ private:
   LockManager lock_manager_;
   YoloDetector yolo_;
   ReidExtractor reid_;
-  tf2_ros::Buffer tf_buffer_;
-  tf2_ros::TransformListener tf_listener_;
   diagnostic_updater::Updater diagnostics_;
-  image_geometry::PinholeCameraModel camera_model_;
   PerceptionPipeline pipeline_;
 
   rclcpp_lifecycle::LifecyclePublisher<smart_follower_msgs::msg::PersonPoseArray>::SharedPtr person_pub_;
   rclcpp::Subscription<smart_follower_msgs::msg::FollowCommand>::SharedPtr command_sub_;
   rclcpp::Subscription<Image>::SharedPtr color_sub_;
-  rclcpp::Subscription<Image>::SharedPtr depth_sub_;
-  rclcpp::Subscription<CameraInfo>::SharedPtr info_sub_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
 
   bool diagnostics_registered_{false};

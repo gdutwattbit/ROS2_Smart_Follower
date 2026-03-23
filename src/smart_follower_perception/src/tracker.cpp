@@ -1,7 +1,6 @@
 #include "smart_follower_perception/tracker.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <utility>
 
 #include "smart_follower_perception/assignment.hpp"
@@ -103,7 +102,6 @@ Tracker::RunResult Tracker::run_tracking(
       low_det.push_back(det);
     }
   }
-
 
   if (tracks_.empty()) {
     for (const auto & det : high_det) {
@@ -213,11 +211,10 @@ const rclcpp::Time & Tracker::last_stamp() const
 cv::Matx<float, kStateDim, kStateDim> Tracker::build_transition(float dt)
 {
   cv::Matx<float, kStateDim, kStateDim> transition = cv::Matx<float, kStateDim, kStateDim>::eye();
-  transition(0, 5) = dt;
-  transition(1, 6) = dt;
-  transition(2, 7) = dt;
-  transition(3, 8) = dt;
-  transition(4, 9) = dt;
+  transition(0, 4) = dt;
+  transition(1, 5) = dt;
+  transition(2, 6) = dt;
+  transition(3, 7) = dt;
   return transition;
 }
 
@@ -233,7 +230,6 @@ Track Tracker::create_track(const Detection & det, const rclcpp::Time & stamp)
   track.state = smart_follower_msgs::msg::TrackedPerson::TENTATIVE;
   track.confidence = det.confidence;
   track.bbox = det.bbox;
-  track.depth_m = det.depth_m;
   track.first_seen = stamp;
   track.last_seen = stamp;
   track.hit_count = 1;
@@ -241,17 +237,16 @@ Track Tracker::create_track(const Detection & det, const rclcpp::Time & stamp)
   track.kf.measurementMatrix = cv::Mat::zeros(kMeasureDim, kStateDim, CV_32F);
   track.kf.measurementMatrix.at<float>(0, 0) = 1.0F;
   track.kf.measurementMatrix.at<float>(1, 1) = 1.0F;
-  track.kf.measurementMatrix.at<float>(2, 3) = 1.0F;
-  track.kf.measurementMatrix.at<float>(3, 4) = 1.0F;
+  track.kf.measurementMatrix.at<float>(2, 2) = 1.0F;
+  track.kf.measurementMatrix.at<float>(3, 3) = 1.0F;
   cv::setIdentity(track.kf.processNoiseCov, cv::Scalar::all(1e-2));
   cv::setIdentity(track.kf.measurementNoiseCov, cv::Scalar::all(1e-1));
   cv::setIdentity(track.kf.errorCovPost, cv::Scalar::all(1.0));
 
   track.kf.statePost.at<float>(0, 0) = det.bbox.x + det.bbox.width * 0.5F;
   track.kf.statePost.at<float>(1, 0) = det.bbox.y + det.bbox.height * 0.5F;
-  track.kf.statePost.at<float>(2, 0) = det.depth_m;
-  track.kf.statePost.at<float>(3, 0) = det.bbox.width;
-  track.kf.statePost.at<float>(4, 0) = det.bbox.height;
+  track.kf.statePost.at<float>(2, 0) = det.bbox.width;
+  track.kf.statePost.at<float>(3, 0) = det.bbox.height;
 
   if (det.feature_valid) {
     track.feature_valid = true;
@@ -267,9 +262,8 @@ void Tracker::predict_track(Track & track, float dt)
   cv::Mat prediction = track.kf.predict();
   const float cx = prediction.at<float>(0, 0);
   const float cy = prediction.at<float>(1, 0);
-  const float width = std::max(2.0F, prediction.at<float>(3, 0));
-  const float height = std::max(2.0F, prediction.at<float>(4, 0));
-  track.depth_m = prediction.at<float>(2, 0);
+  const float width = std::max(2.0F, prediction.at<float>(2, 0));
+  const float height = std::max(2.0F, prediction.at<float>(3, 0));
   track.bbox = cv::Rect2f(cx - width * 0.5F, cy - height * 0.5F, width, height);
 }
 
@@ -281,14 +275,6 @@ void Tracker::update_track(Track & track, const Detection & det, const rclcpp::T
   measurement.at<float>(2, 0) = det.bbox.width;
   measurement.at<float>(3, 0) = det.bbox.height;
   track.kf.correct(measurement);
-
-  if (det.depth_m >= config_.depth_min_m && det.depth_m <= config_.depth_max_m) {
-    track.depth_m = det.depth_m;
-    track.kf.statePost.at<float>(2, 0) = det.depth_m;
-    track.invalid_depth_frames = 0;
-  } else {
-    track.invalid_depth_frames += 1;
-  }
 
   track.bbox = det.bbox;
   track.confidence = det.confidence;
@@ -327,17 +313,8 @@ double Tracker::full_cost(const Track & track, const Detection & det, float img_
 {
   const double iou_cost = 1.0 - bbox_iou(track.bbox, det.bbox);
   const double center_cost = normalized_center_distance(track.bbox, det.bbox, img_w, img_h);
-  double depth_cost = 1.0;
-  if (det.depth_m > 0.0F && track.depth_m > 0.0F) {
-    const double depth_delta = std::abs(static_cast<double>(det.depth_m) - static_cast<double>(track.depth_m));
-    depth_cost = clamp01(depth_delta / std::max(1e-3, static_cast<double>(config_.depth_norm_m)));
-    if (depth_delta > config_.depth_gate_m) {
-      return 2.0;
-    }
-  }
   return config_.weights.w_iou * iou_cost +
          config_.weights.w_center * center_cost +
-         config_.weights.w_depth * depth_cost +
          config_.weights.w_appearance * appearance_cost(track, det);
 }
 

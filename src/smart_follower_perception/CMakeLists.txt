@@ -16,11 +16,6 @@ find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
-find_package(image_transport REQUIRED)
-find_package(image_geometry REQUIRED)
-find_package(tf2 REQUIRED)
-find_package(tf2_ros REQUIRED)
-find_package(tf2_geometry_msgs REQUIRED)
 find_package(diagnostic_updater REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(smart_follower_msgs REQUIRED)
@@ -77,10 +72,6 @@ ament_target_dependencies(smart_follower_perception_core
   sensor_msgs
   geometry_msgs
   std_msgs
-  image_geometry
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
   diagnostic_updater
   diagnostic_msgs
   smart_follower_msgs
@@ -115,6 +106,13 @@ target_link_libraries(perception_node
   Eigen3::Eigen
 )
 
+if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+  set_target_properties(perception_node PROPERTIES
+    BUILD_RPATH ${ONNXRUNTIME_LIBRARY_DIR}
+    INSTALL_RPATH ${ONNXRUNTIME_LIBRARY_DIR}
+  )
+endif()
+
 ament_target_dependencies(perception_node
   rclcpp
   rclcpp_lifecycle
@@ -123,15 +121,9 @@ ament_target_dependencies(perception_node
   geometry_msgs
   std_msgs
   cv_bridge
-  image_transport
-  image_geometry
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
   diagnostic_updater
   diagnostic_msgs
   smart_follower_msgs
-  cv_bridge
 )
 
 install(TARGETS perception_node smart_follower_perception_core
@@ -154,7 +146,6 @@ if(BUILD_TESTING)
   find_package(ament_cmake_xmllint REQUIRED)
   ament_lint_cmake()
   ament_xmllint()
-
 
   ament_add_gtest(test_assignment test/test_assignment.cpp)
   if(TARGET test_assignment)

@@ -2,7 +2,6 @@
 
 #include <memory>
 
-#include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
 
 #include "smart_follower_perception/frame_sync.hpp"
@@ -20,40 +19,30 @@ FrameSynchronizer::Image::SharedPtr make_image(double t_sec)
   return msg;
 }
 
-FrameSynchronizer::CameraInfo::SharedPtr make_info(double t_sec)
-{
-  auto msg = std::make_shared<FrameSynchronizer::CameraInfo>();
-  msg->header.stamp.sec = static_cast<int32_t>(t_sec);
-  msg->header.stamp.nanosec = static_cast<uint32_t>((t_sec - static_cast<double>(msg->header.stamp.sec)) * 1e9);
-  return msg;
-}
-
 }  // namespace
 
-TEST(FrameSync, PopTripletWithinSlop)
+TEST(FrameSync, PopsQueuedColorFramesInOrder)
 {
   FrameSynchronizer sync;
-  sync.configure(0.04, 6);
+  sync.configure(6);
 
-  auto color = make_image(1.000);
-  auto depth = make_image(1.010);
-  auto info = make_info(1.020);
+  auto color1 = make_image(1.000);
+  auto color2 = make_image(1.010);
+  sync.push_color(color1);
+  sync.push_color(color2);
 
-  sync.push_color(color);
-  sync.push_depth(depth);
-  sync.push_info(info);
-
-  FrameSynchronizer::Triplet triplet;
-  ASSERT_TRUE(sync.pop_next(triplet));
-  EXPECT_EQ(triplet.color.get(), color.get());
-  EXPECT_EQ(triplet.depth.get(), depth.get());
-  EXPECT_EQ(triplet.info.get(), info.get());
+  FrameSynchronizer::Frame frame;
+  ASSERT_TRUE(sync.pop_next(frame));
+  EXPECT_EQ(frame.color.get(), color1.get());
+  ASSERT_TRUE(sync.pop_next(frame));
+  EXPECT_EQ(frame.color.get(), color2.get());
+  EXPECT_FALSE(sync.pop_next(frame));
 }
 
 TEST(FrameSync, CacheTrimIncrementsDropped)
 {
   FrameSynchronizer sync;
-  sync.configure(0.04, 3);
+  sync.configure(3);
 
   sync.push_color(make_image(1.0));
   sync.push_color(make_image(1.1));
