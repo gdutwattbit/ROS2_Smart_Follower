@@ -17,8 +17,10 @@
 
 ### 1.1 感知侧模型
 launch 中会把模型路径覆盖为：
-- YOLO: `models/yolo26n_static_480x640_simplify_e2e.onnx`
+- YOLO: `models/yolo26n_static_256x320_simplify_e2e.onnx`
 - ReID: `models/osnet_x0_5_512.onnx`
+
+> 说明：本来目标是把 YOLO 压到 320×240，但静态 end-to-end ONNX 导出会因 stride 约束自动对齐到 `320×256`，所以当前项目默认使用的是 `320×256`。
 
 ### 1.2 主链路频率
 - 相机彩色输入：由相机驱动决定
@@ -153,15 +155,30 @@ launch 中会把模型路径覆盖为：
 | 参数 | 默认值 | 单位 | 作用 | 调参建议 |
 |---|---:|---|---|---|
 | `monocular.camera_info_service` | `/camera/get_camera_info` | 服务名 | 启动时获取相机真实内参 | Astra 默认用它 |
-| `monocular.person_height_m` | `1.70` | 米 | 兼容保留参数，当前版本**不参与计算** | 暂时可忽略 |
 | `monocular.horizontal_fov_deg` | `69.0` | 度 | 当服务拿不到内参时，用于 fallback 估算焦距 | 只有 fallback 才生效 |
 | `monocular.min_range_m` | `0.60` | 米 | 输出最近距离截断 | 太小会让近距离估计更激进 |
 | `monocular.max_range_m` | `6.00` | 米 | 输出最远距离截断 | 室内跟随可适当降到 3~4 |
-| `monocular.camera_height_m` | `0.28` | 米 | 相机光心离地高度 | **必须按实车标定** |
-| `monocular.camera_pitch_deg` | `18.0` | 度 | 相机俯仰角，向下为正 | **必须按实车标定** |
-| `monocular.camera_x_offset_m` | `0.00` | 米 | 相机相对 base 前后偏移 | 相机不在车体原点时填写 |
-| `monocular.camera_y_offset_m` | `0.00` | 米 | 相机相对 base 左右偏移 | 偏左为正/偏右为负要和你车体定义一致验证 |
+| `monocular.camera_height_m` | `0.135` | 米 | 相机光心离地高度 | **必须按实车标定** |
+| `monocular.camera_pitch_deg` | `0.0` | 度 | 相机俯仰角，向下为正 | **必须按实车标定** |
+| `monocular.camera_x_offset_m` | `0.175` | 米 | 相机相对 base 前后偏移 | 相机不在车体原点时填写 |
+| `monocular.camera_y_offset_m` | `0.01` | 米 | 相机相对 base 左右偏移 | 偏左为正/偏右为负要和你车体定义一致验证 |
 | `monocular.min_downward_angle_deg` | `2.0` | 度 | 接近地平线时拒绝投影的最小下视角 | 太小容易出离谱远距离，太大容易丢远处目标 |
+
+#### 正负号不要搞反
+- `monocular.camera_pitch_deg`：**向下俯视为正**，向上抬头为负
+- `monocular.camera_x_offset_m`：**相机在 base 原点前方为正**，在后方为负
+- `monocular.camera_y_offset_m`：**相机在车体左侧为正**，在右侧为负
+
+如果按 ROS 常见车体坐标理解，就是：
+- `x` 朝前
+- `y` 朝左
+- `z` 朝上
+
+所以你这组实测值代表：
+- 相机离地 `0.135 m`
+- 基本水平安装（俯仰 `0°`）
+- 相机位于 base 原点前方 `17.5 cm`
+- 相机位于 base 原点左侧 `1 cm`
 
 #### 这组参数怎么理解
 当前位置估计不是“按人高猜距离”，而是：
@@ -170,7 +187,7 @@ launch 中会把模型路径覆盖为：
 - 再结合相机离地高度与俯仰角
 - 把这个像素点投到地面上
 
-所以对结果影响最大的不是 `person_height_m`，而是：
+所以对结果影响最大的参数是：
 1. `camera_height_m`
 2. `camera_pitch_deg`
 3. 内参是否真实拿到

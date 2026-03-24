@@ -621,3 +621,328 @@ yolo:
    - 先做**统一缓冲区 + 受控双 worker 实验**
    - 同时严密监控 CPU、队列积压、输出频率、控制稳定性
    - 不宜直接把双路方案当作默认量产配置
+
+## 12. 第六组测试：320x256 YOLO + 轻量 ReID 小车端实机 Profiling（当前工作区）
+
+测试时间：2026-03-24（本地时间）  
+说明：小车/容器内系统时间仍有漂移，因此运行日志时间显示为 `2026-01-08`，但本轮测试实际执行于 **2026-03-24**。
+
+测试目的：在**当前最新工作区**与**新降分辨率 YOLO 模型**下，重新获取一轮小车端真实相机输入、推理分阶段耗时与资源占用数据，并直接写回本报告。
+
+### 12.1 本轮测试环境
+
+- 主控：树莓派小车主控（`192.168.0.100`）
+- 运行位置：小车端 `ros2:wheeltec_V1.1` Docker 容器
+- 工作区：`/home/wheeltec/ros2_smart_follower`
+- 相机驱动：`wheeltec_ros2` 内置 `astra_camera`
+- Astra 相机启动日志确认：
+  - `set color video mode Resolution :640x480@30Hz`
+  - `set depth video mode Resolution :640x480@30Hz`
+- ONNX Runtime：
+  - `/home/wheeltec/wheeltec_ros2/third_party/onnxruntime-linux-aarch64-1.24.3`
+- 实机画面状态：**镜头中存在 1 个稳定人体目标**
+
+### 12.2 本轮固定配置
+
+- Launch：`astra_camera astra.launch.xml` + `smart_follower_only.launch.py`
+- YOLO：`models/yolo26n_static_256x320_simplify_e2e.onnx`
+- ReID：`models/osnet_x0_5_512.onnx`
+- YOLO ORT：`intra=3 / inter=1 / sequential`
+- ReID ORT：`intra=1 / inter=1 / sequential`
+- `process_every_n_frames=3`
+- 当前主链路：纯 RGB 单目地面投影，不再走深度主链路
+
+日志确认：
+
+- `YOLO ready=1`
+- `ReID ready=1`
+- 稳定持续看到：
+  - `detections=1`
+  - `persons=1`
+  - `tracks=1`
+- 同时持续看到：
+  - `ReID output dim 512 padded to 2048 for benchmarking compatibility`
+  - 属于当前 OSNet 兼容策略的预期行为
+
+### 12.3 链路时延结果
+
+取稳定运行后的最新累计 profiling 结果（日志尾部 `profile avg_ms ...`）：
+
+| 阶段 | 平均耗时（ms） |
+|---|---:|
+| cv_bridge | `0.45` |
+| yolo | `45.38` |
+| reid | `36.53` |
+| recover | `0.00` |
+| tracking | `0.22` |
+| lock | `0.00` |
+| projection | `0.00` |
+| msg_fill | `0.02` |
+| message | `0.03` |
+| publish | `0.19` |
+| total | `87.84` |
+
+对应稳定日志样例：
+
+- `profile avg_ms total=87.84 cv_bridge=0.45 yolo=45.38 reid=36.53 ... publish=0.19`
+
+#### 12.3.1 帧间抖动（取最近 8 条 `last_ms`）
+
+| 指标 | 观测范围 |
+|---|---:|
+| last total | `81.99 ~ 147.37 ms` |
+| last yolo | `41.57 ~ 89.11 ms` |
+| last reid | `35.63 ~ 48.20 ms` |
+
+说明：
+
+- 平均值已经比较稳定，主抖动仍主要来自 **YOLO 单帧推理波动**
+- 但即使按较高的 `last_ms` 看，本轮也明显快于上一版 `480x640` YOLO 组合
+
+### 12.4 输入 / 输出频率
+
+使用 `ros2 topic hz` 在实机运行中直接采样：
+
+| 话题 | 实测频率 |
+|---|---:|
+| `/camera/color/image_raw` | `14.603 Hz` |
+| `/robot1/person_pose` | `6.515 Hz` |
+
+说明：
+
+- Astra 驱动配置仍是 `640x480@30Hz`，但**实际进入 ROS 图链路的彩色输入只有约 `14.6Hz`**
+- 在 `process_every_n_frames=3` 的配置下，最终 `person_pose` 仍能稳定到 **约 `6.5Hz`**
+- 本轮相比上一版实测，输出频率已经有明显改善，但**彩色输入频率不足**仍然是独立问题
+
+### 12.5 资源占用结果（20 秒 / 1Hz 采样）
+
+采样方式：在容器内对 `/proc` 连续采样 `20` 次，统计系统忙碌度与关键进程 CPU / RSS。
+
+#### 12.5.1 系统级 CPU
+
+| 指标 | 数值 |
+|---|---:|
+| 4 核系统 busy 平均占用 | `43.63%` |
+| 4 核系统 busy 峰值 | `54.18%` |
+| 4 核系统 busy 最低 | `34.52%` |
+
+#### 12.5.2 perception_node
+
+| 指标 | 数值 |
+|---|---:|
+| perception_node CPU 平均占用 | `114.36%` |
+| perception_node CPU 峰值 | `153.92%` |
+| perception_node CPU 最低 | `83.25%` |
+| perception_node RSS | `125.11 MiB` |
+| perception_node 线程数 | `16` |
+
+说明：
+
+- 当前单路 perception 实际长期占用约 **1.14 个 CPU 核**
+- 峰值约 **1.54 个核**
+- 内存占用稳定在 **125 MiB** 左右，当前主瓶颈仍然是 **CPU**，不是内存
+
+#### 12.5.3 astra_camera_node
+
+| 指标 | 数值 |
+|---|---:|
+| astra_camera_node CPU 平均占用 | `53.45%` |
+| astra_camera_node CPU 峰值 | `59.85%` |
+| astra_camera_node CPU 最低 | `49.75%` |
+| astra_camera_node RSS | `111.47 MiB` |
+| astra_camera_node 线程数 | `22` |
+
+说明：
+
+- Astra 相机驱动本身稳定占用约 **0.53 个 CPU 核**
+- 因此当前“相机 + 单路感知”组合合计约吃掉 **1.67 个核** 左右
+
+### 12.6 与第 11 组（480x640 YOLO）对比
+
+为便于直接判断本轮收益，和第 11 组“小车端单路最终推荐组合实测”做对比：
+
+| 指标 | 第 11 组（480x640） | 第 12 组（320x256） | 变化 |
+|---|---:|---:|---:|
+| total | `293.42 ms` | `87.84 ms` | `-205.58 ms`（`-70.1%`） |
+| yolo | `223.85 ms` | `45.38 ms` | `-178.47 ms`（`-79.7%`） |
+| reid | `40.11 ms` | `36.53 ms` | `-3.58 ms`（`-8.9%`） |
+| `/robot1/person_pose` | `2.243 Hz` | `6.515 Hz` | `+4.272 Hz`（约 `+190.5%`） |
+| perception CPU | `196.00%` | `114.36%` | `-81.64` 个百分点 |
+
+结论非常明确：
+
+1. **这轮最主要的收益来自 YOLO 分辨率下降**，YOLO 耗时被大幅压缩
+2. ReID 变化不大，说明当前主要改进点确实发生在检测端
+3. 输出频率已经从 `2.24Hz` 量级提升到 `6.5Hz` 左右，实机可用性明显改善
+4. perception CPU 也明显下降，给后续继续优化或做受控并行实验留出了更多空间
+
+### 12.7 本轮结论
+
+本轮小车端真实 profiling 可以得出：
+
+1. 当前 `320x256` 静态 YOLO + 轻量 OSNet ReID 的组合，已经比上一版 `480x640` 组合有**非常明显的实机收益**
+2. 当前稳定链路时延约为：
+   - `total ≈ 87.84 ms`
+   - `yolo ≈ 45.38 ms`
+   - `reid ≈ 36.53 ms`
+3. 当前主瓶颈仍然是 **YOLO**，但它已经从“绝对压死全链路的大头”下降到了可继续优化的水平
+4. 当前单路 perception 的资源占用大致为：
+   - 平均约 `1.14` 核
+   - 峰值约 `1.54` 核
+   - RSS 约 `125 MiB`
+5. 从资源角度看，**继续做受控双路 / 双 worker 实验已经比第 11 组时更有现实意义**，但前提依旧是：
+   - 先解决彩色输入频率只有 `14.6Hz` 的问题
+   - 双路实验时严密监控 CPU、输出频率和控制稳定性
+6. 就当前版本而言，这一组数据已经可以作为后续“并行推理是否值得继续推进”的**新基线**
+
+
+## 13. 彩色输入掉速定位与 YOLO 线程对照（2026-03-24）
+
+### 13.1 目的
+
+本轮围绕两个问题继续定位：
+
+1. 为什么 color-only 后，Astra 明明能发 `30Hz`，但 follower 实际彩色输入仍会掉速
+2. YOLO ORT `intra_op_num_threads` 取 `1/2/3` 时，哪一档对整车链路最优
+
+测试环境统一为：
+
+- 小车主控容器：`ros2:wheeltec_V1.1`
+- 相机侧临时参数：
+  - `color_qos:=sensor_data`
+  - `enable_color:=true`
+  - `enable_depth:=false`
+  - `enable_point_cloud:=false`
+  - `depth_registration:=false`
+  - `enable_d2c_viewer:=false`
+  - `enable_ir:=false`
+- 模型组合：
+  - `models/yolo26n_static_256x320_simplify_e2e.onnx`
+  - `models/osnet_x0_5_512.onnx`
+- perception 参数：
+  - `process_every_n_frames=3`
+  - `detect_every_n_frames=1`
+
+### 13.2 color-only 相机本体能力对照
+
+先只启动 color-only Astra，再用轻量订阅节点验证相机与 DDS 本体能力：
+
+| 场景 | color 频率 | astra_camera CPU | 结论 |
+|---|---:|---:|---|
+| 仅 Astra + 轻量订阅 | `29.43 Hz`（自写 probe） / `29.59 Hz`（`ros2 topic hz`） | `13.9%` | 相机本体与 DDS 本身可稳定接近 `30Hz` |
+| Astra + follower/perception | perception `raw_input color` 约 `15.3 Hz` | `13%` 左右 | 掉速发生在 follower/perception 联动时 |
+| Astra + follower/perception + 轻量订阅 | 轻量订阅约 `10.38 Hz`，perception `raw_input color` 约 `12~14 Hz` | `13%` 左右 | perception 跑起来后会把图像接收链路整体挤压变慢 |
+
+结论：
+
+1. **不是 Astra 相机本体发不出 `30Hz`**
+2. **也不是 `sensor_data` QoS 之外的单一相机参数问题**
+3. 当前彩色图掉速的主因已经收敛为：**perception 运行负载对 ROS2 图像接收 / 调度链路的挤压**
+
+### 13.3 YOLO `intra_op_num_threads` = 3 / 2 / 1 对照
+
+#### 13.3.1 `intra=3`
+
+参考本轮 color-only follower 基线：
+
+| 指标 | 数值 |
+|---|---:|
+| perception `raw_input color` | 约 `15.3 Hz` |
+| `/robot1/person_pose` | 约 `5~6 Hz` |
+| profile total | 约 `72.6 ms` |
+| profile yolo | 约 `35.4 ms` |
+| perception CPU | 约 `68~70%` |
+
+判断：
+
+- 单帧 YOLO 最快，但**线程争抢最明显**
+- 图像接收被压制，整条链路综合效果最差
+
+#### 13.3.2 `intra=2`
+
+在节点运行中热更新：
+
+```bash
+ros2 param set /robot1/perception_node yolo.ort.intra_op_num_threads 2
+```
+
+实测：
+
+| 指标 | 数值 |
+|---|---:|
+| perception `raw_input color` | 约 `21.5 Hz` |
+| `/robot1/person_pose` | 约 `8.4~8.8 Hz` |
+| profile total | 约 `75~76 ms` |
+| profile yolo | 约 `39~39.5 ms` |
+| perception CPU | 约 `74~76%` |
+
+判断：
+
+- YOLO 单帧略慢于 `intra=3`
+- 但彩色图实收和发布频率显著改善
+- 是一个明显更均衡的配置
+
+#### 13.3.3 `intra=1`
+
+继续热更新：
+
+```bash
+ros2 param set /robot1/perception_node yolo.ort.intra_op_num_threads 1
+```
+
+实测：
+
+| 指标 | 数值 |
+|---|---:|
+| `ros2 topic hz /camera/color/image_raw` | 约 `28.8~29.1 Hz` |
+| perception `raw_input color` | 约 `25.7 Hz` |
+| `/robot1/person_pose` | 约 `9.3~9.5 Hz` |
+| profile total | 约 `92~93 ms` |
+| profile yolo | 约 `55~57 ms` |
+| perception CPU | 约 `81~82%` |
+
+判断：
+
+- YOLO 单帧最慢
+- 但**图像接收链路恢复最好**
+- 在 `process_every_n_frames=3` 前提下，`/person_pose` 已接近我们目标的 `10Hz`
+- 对“整车实际体验”来说，综合效果最好
+
+### 13.4 本轮结论
+
+综合 1/2/3 三档：
+
+| 配置 | YOLO 单帧 | color 实收 | `person_pose` | 综合评价 |
+|---|---:|---:|---:|---|
+| `intra=3` | 最快 | 最差 | 最差 | 不推荐 |
+| `intra=2` | 中等 | 明显改善 | 明显改善 | 可用折中 |
+| `intra=1` | 最慢 | 最好 | 最好 | **当前推荐默认值** |
+
+最终结论：
+
+1. 当前平台上，**单帧 benchmark 最优 != 整体链路最优**
+2. 主矛盾是“推理线程过多挤压了图像接收/调度”，不是“YOLO 再快 3~5ms”
+3. 因此默认值应优先选择：
+   - `yolo.ort.intra_op_num_threads = 1`
+4. `intra=2` 可作为保守备选；`intra=3` 在当前平台和当前链路上不建议继续作为默认配置
+
+### 13.5 当前默认配置落地
+
+截至本轮结束，工作区默认值已调整为：
+
+```yaml
+yolo:
+  ort:
+    intra_op_num_threads: 1
+    inter_op_num_threads: 1
+    execution_mode: sequential
+```
+
+同时，follower 自己的 full bringup 已收口到 color-only Astra 默认配置：
+
+- `color_qos:=sensor_data`
+- `enable_depth:=false`
+- `enable_point_cloud:=false`
+- `depth_registration:=false`
+- `enable_d2c_viewer:=false`
+- `enable_ir:=false`

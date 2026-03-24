@@ -12,7 +12,6 @@ namespace smart_follower_perception
 struct MonocularPositionConfig
 {
   std::string camera_info_service{"/camera/get_camera_info"};
-  float person_height_m{1.70F};
   float horizontal_fov_deg{69.0F};
   float min_range_m{0.6F};
   float max_range_m{6.0F};

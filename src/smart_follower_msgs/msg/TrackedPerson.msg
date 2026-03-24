@@ -10,9 +10,6 @@ float32 confidence
 sensor_msgs/RegionOfInterest bbox
 # Estimated position in PersonPoseArray.header.frame_id.
 geometry_msgs/Point position
-# 3D velocity in PersonPoseArray.header.frame_id.
-geometry_msgs/Vector3 velocity
-# Estimated range in meters; NaN when no direct depth measurement exists.
-float32 depth_m
-float32[2048] appearance_feature
+# L2-normalized appearance feature used by ReID/tracking.
+float32[512] appearance_feature
 builtin_interfaces/Time last_seen

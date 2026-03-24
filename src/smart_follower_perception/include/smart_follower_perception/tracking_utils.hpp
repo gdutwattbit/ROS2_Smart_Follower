@@ -10,6 +10,8 @@
 
 #include <opencv2/core.hpp>
 
+#include "smart_follower_perception/constants.hpp"
+
 namespace smart_follower_perception
 {
 
@@ -17,7 +19,7 @@ struct Detection
 {
   cv::Rect2f bbox;
   float confidence{0.0F};
-  std::array<float, 2048> feature{};
+  std::array<float, kFeatureDim> feature{};
   bool feature_valid{false};
   int recovered_track_id{-1};
 };
@@ -54,7 +56,7 @@ inline double normalized_center_distance(
   return std::max(0.0, std::min(1.0, static_cast<double>(d)));
 }
 
-inline double cosine_distance(const std::array<float, 2048> & a, const std::array<float, 2048> & b)
+inline double cosine_distance(const std::array<float, kFeatureDim> & a, const std::array<float, kFeatureDim> & b)
 {
   double dot = 0.0;
   double na = 0.0;

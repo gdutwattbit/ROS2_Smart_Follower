@@ -7,7 +7,9 @@
 - 定位侧：**纯 RGB 单目位置估计**（Astra 内参 + bbox 底点地面投影）
 - 控制侧：20Hz 跟随控制、短时预测补帧、超声波避障、速度仲裁
 
-> 当前基线版本：`alpha-0.1.7`
+> 当前开发标签：`dev-0.1.8`
+> 
+> 当前运行时基线：`alpha-0.1.7`
 > 
 > 当前主线形态：**纯 RGB + 单目位置估计 + 左右超声波避障**
 
@@ -40,7 +42,7 @@ Follower / Obstacle / Arbiter
 - 单目定位优先调用 Astra 的 `/camera/get_camera_info` 获取真实内参
 - 若服务不可用，则自动退回到 `horizontal_fov_deg` 的 fallback 近似内参
 - `TrackedPerson.position` 为 base frame 下的位置估计结果
-- `TrackedPerson.depth_m` 为兼容字段，当前纯 RGB 模式下填 `NaN`
+- `TrackedPerson.appearance_feature` 已收口为与当前 OSNet 一致的 `512` 维
 
 ---
 
@@ -103,11 +105,13 @@ ros2_smart_follower/
 ## 4. 当前推荐模型与运行组合
 
 默认模型组合：
-- `models/yolo26n_static_480x640_simplify_e2e.onnx`
+- `models/yolo26n_static_256x320_simplify_e2e.onnx`
 - `models/osnet_x0_5_512.onnx`
 
+说明：原始设想是 320x240，但静态 end-to-end YOLO 导出会受 stride 约束自动上调到 `320x256`，因此当前默认实际输入为 `320x256`。
+
 当前推荐线程参数：
-- YOLO ORT: `intra_op_num_threads=3`, `inter_op_num_threads=1`, `sequential`
+- YOLO ORT: `intra_op_num_threads=1`, `inter_op_num_threads=1`, `sequential`
 - ReID ORT: `intra_op_num_threads=1`, `inter_op_num_threads=1`, `sequential`
 
 当前推荐节奏：
@@ -115,6 +119,7 @@ ros2_smart_follower/
 - perception 处理：`process_every_n_frames=3`，约 10Hz
 - follower 控制输出：20Hz
 - 中间依靠控制侧短时常速度预测补帧
+- follower 默认目标距离：`0.6m`
 
 ---
 

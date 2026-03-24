@@ -205,7 +205,7 @@ std::vector<YoloDetector::Result> YoloDetector::detect(const cv::Mat & bgr)
   const auto preprocess_begin = SteadyClock::now();
   const cv::Mat * input_image = &bgr;
   if (bgr.cols != input_w_ || bgr.rows != input_h_) {
-    cv::resize(bgr, resize_scratch_, cv::Size(input_w_, input_h_));
+    cv::resize(bgr, resize_scratch_, cv::Size(input_w_, input_h_), 0.0, 0.0, cv::INTER_LINEAR);
     input_image = &resize_scratch_;
   }
   fill_yolo_input_tensor_from_bgr(*input_image);
@@ -487,20 +487,15 @@ std::array<float, kFeatureDim> ReidExtractor::extract(const cv::Mat & bgr, const
     output_dim_error_msg_ = "ReID output dim invalid: " + std::to_string(total);
     return feat;
   }
-  if (total > kFeatureDim) {
+  if (total != kFeatureDim) {
     output_dim_mismatch_ = true;
-    output_dim_error_msg_ = "ReID output dim mismatch, expected <= " +
+    output_dim_error_msg_ = "ReID output dim mismatch, expected " +
       std::to_string(kFeatureDim) + ", got " + std::to_string(total);
     return feat;
   }
-  if (total != kFeatureDim) {
-    output_dim_mismatch_ = true;
-    output_dim_error_msg_ = "ReID output dim " + std::to_string(total) +
-      " padded to " + std::to_string(kFeatureDim) + " for benchmarking compatibility";
-  }
 
   double norm = 0.0;
-  for (int64_t i = 0; i < total; ++i) {
+  for (int64_t i = 0; i < kFeatureDim; ++i) {
     feat[static_cast<std::size_t>(i)] = out_data[i];
     norm += static_cast<double>(feat[static_cast<std::size_t>(i)]) *
       static_cast<double>(feat[static_cast<std::size_t>(i)]);

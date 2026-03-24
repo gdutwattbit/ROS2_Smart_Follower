@@ -6,13 +6,13 @@
     base_frame: base_footprint
 
     yolo:
-      model_path: models/yolo26n_static_480x640_simplify_e2e.onnx
-      input_w: 640
-      input_h: 480
+      model_path: models/yolo26n_static_256x320_simplify_e2e.onnx
+      input_w: 320
+      input_h: 256
       person_class_id: 0
       conf_threshold: 0.25
       ort:
-        intra_op_num_threads: 3
+        intra_op_num_threads: 1
         inter_op_num_threads: 1
         execution_mode: sequential
 
@@ -47,14 +47,13 @@
 
     monocular:
       camera_info_service: /camera/get_camera_info
-      person_height_m: 1.70
       horizontal_fov_deg: 69.0
       min_range_m: 0.60
       max_range_m: 6.00
-      camera_height_m: 0.28
-      camera_pitch_deg: 18.0
-      camera_x_offset_m: 0.00
-      camera_y_offset_m: 0.00
+      camera_height_m: 0.135
+      camera_pitch_deg: 0.0
+      camera_x_offset_m: 0.175
+      camera_y_offset_m: 0.01
       min_downward_angle_deg: 2.0
 
     lock:

@@ -110,10 +110,6 @@ geometry_msgs::msg::Twist ArbiterRuntime::compute_output(const rclcpp::Time & no
     age = (now_time - last_target_time_).seconds();
   }
 
-  if (!stop_latched_ && age > config_.thresholds.lost_time_search_max) {
-    stop_latched_ = true;
-  }
-
   if (stop_latched_) {
     mode_ = ArbiterMode::STOP;
   } else if (avoid_on) {

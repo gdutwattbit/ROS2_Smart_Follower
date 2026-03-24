@@ -7,7 +7,34 @@ follower_controller_node:
   ros__parameters:
     cmd_vel_follow_topic: cmd_vel_follow
     control_rate: 20.0
-    target_distance: 1.0
+    target_distance: 0.6
+    theta_deadzone: 0.03
+    target_timeout: 0.3
+    prediction_horizon_s: 0.25
+    velocity_ema_alpha: 0.70
+    max_target_speed_mps: 1.50
+    pid_r:
+      kp: 0.8
+      ki: 0.0
+      kd: 0.1
+    pid_t:
+      kp: 1.2
+      ki: 0.0
+      kd: 0.1
+    pid_i_limit: 0.5
+    pid_kaw: 0.2
+    limits:
+      v_max: 0.6
+      w_max: 1.2
+      dv_max: 0.5
+      dw_max: 1.5
+
+
+/robot1/follower_controller_node:
+  ros__parameters:
+    cmd_vel_follow_topic: cmd_vel_follow
+    control_rate: 20.0
+    target_distance: 0.6
     theta_deadzone: 0.03
     target_timeout: 0.3
     prediction_horizon_s: 0.25

@@ -4,6 +4,19 @@
 
 ## Unreleased
 
+## dev-0.1.8 - 2026-03-24
+
+### Changed
+- 清理纯 RGB 主线下的兼容残留：删除 `monocular.person_height_m` 参数与无效消息字段 `TrackedPerson.velocity/depth_m`
+- 将 ReID / `appearance_feature` 接口从历史兼容的 `2048` 维收口到当前真实使用的 `512` 维，移除运行时 padding 兼容链
+- `smart_follower.launch.py` / `smart_follower_only.launch.py` 默认模型切换为 `yolo26n_static_256x320_simplify_e2e.onnx + osnet_x0_5_512.onnx`，并统一 color-only Astra 启动路径
+- 控制侧默认跟随距离调整为 `0.6m`，同时补齐 `/robot1/follower_controller_node` 的 namespaced YAML，避免运行时回退到默认 `1.0m`
+- `ArbiterRuntime` 移除“目标超时后永久 stop_latch”行为；现在仅 `ESTOP` 会锁停，目标恢复后可自动恢复跟随
+
+### Added
+- 根目录 `test.md` 补充 320x256 模型、线程组合与车端联调记录
+- 根目录 `try.md` / `当前推荐运行组合.md` 同步更新当前推荐模型、线程与调参说明
+
 ## alpha-0.1.7 - 2026-03-23
 
 ### Changed
@@ -44,7 +57,6 @@
 - `FrameSynchronizer` 改为只缓存彩色图像
 - `PerceptionPipeline` 改为纯彩色检测链路
 - `TrackedPerson.position` 改由 bbox 做单目位置估计生成
-- `TrackedPerson.depth_m` 保留兼容字段，无真实深度时写入 `NaN`
 - `Tracker` 去掉深度代价与深度 gating，状态维度由 10 维收缩到 8 维
 - `obstacle_avoidance_node` / `ObstacleRuntime` 移除深度图依赖，仅保留左右超声波避障
 - perception / control / bringup 的 YAML、diagnostics、测试、README 同步清理

@@ -122,10 +122,6 @@ smart_follower_msgs::msg::TrackedPerson track_to_message(
     }
   }
 
-  msg.velocity.x = 0.0;
-  msg.velocity.y = 0.0;
-  msg.velocity.z = 0.0;
-  msg.depth_m = std::numeric_limits<float>::quiet_NaN();
   if (track.feature_valid) {
     std::copy(track.ema_feature.begin(), track.ema_feature.end(), msg.appearance_feature.begin());
   }

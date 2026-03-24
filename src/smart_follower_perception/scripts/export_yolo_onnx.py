@@ -21,9 +21,9 @@ def str2bool(value: str) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", default="yolo26n.pt", help="YOLO checkpoint path")
-    parser.add_argument("--output", default="models/yolo26n_static_480x640_simplify_e2e.onnx", help="Output ONNX path")
-    parser.add_argument("--imgsz", type=int, nargs=2, default=[480, 640], help="H W")
-    parser.add_argument("--opset", type=int, default=12)
+    parser.add_argument("--output", default="models/yolo26n_static_256x320_simplify_e2e.onnx", help="Output ONNX path")
+    parser.add_argument("--imgsz", type=int, nargs=2, default=[256, 320], help="H W (default 256x320; 240x320 static export is rounded up by stride)")
+    parser.add_argument("--opset", type=int, default=17)
     parser.add_argument("--dynamic", type=str2bool, default=False)
     parser.add_argument("--simplify", type=str2bool, default=True)
     parser.add_argument("--end2end", type=str2bool, default=True)

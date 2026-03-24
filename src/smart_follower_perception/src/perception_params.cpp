@@ -51,7 +51,6 @@ void declare_parameters(rclcpp_lifecycle::LifecycleNode & node, const Perception
   node.declare_parameter("tracking.weights.appearance", defaults.weights.w_appearance);
 
   node.declare_parameter("monocular.camera_info_service", defaults.monocular.camera_info_service);
-  node.declare_parameter("monocular.person_height_m", defaults.monocular.person_height_m);
   node.declare_parameter("monocular.horizontal_fov_deg", defaults.monocular.horizontal_fov_deg);
   node.declare_parameter("monocular.min_range_m", defaults.monocular.min_range_m);
   node.declare_parameter("monocular.max_range_m", defaults.monocular.max_range_m);
@@ -110,7 +109,6 @@ void load_parameters(rclcpp_lifecycle::LifecycleNode & node, PerceptionParams & 
   params.weights.w_appearance = node.get_parameter("tracking.weights.appearance").as_double();
 
   params.monocular.camera_info_service = node.get_parameter("monocular.camera_info_service").as_string();
-  params.monocular.person_height_m = node.get_parameter("monocular.person_height_m").as_double();
   params.monocular.horizontal_fov_deg = node.get_parameter("monocular.horizontal_fov_deg").as_double();
   params.monocular.min_range_m = node.get_parameter("monocular.min_range_m").as_double();
   params.monocular.max_range_m = node.get_parameter("monocular.max_range_m").as_double();
@@ -165,7 +163,6 @@ void apply_parameter_override(PerceptionParams & target, const rclcpp::Parameter
   else if (name == "tracking.weights.center") target.weights.w_center = param.as_double();
   else if (name == "tracking.weights.appearance") target.weights.w_appearance = param.as_double();
   else if (name == "monocular.camera_info_service") target.monocular.camera_info_service = param.as_string();
-  else if (name == "monocular.person_height_m") target.monocular.person_height_m = param.as_double();
   else if (name == "monocular.horizontal_fov_deg") target.monocular.horizontal_fov_deg = param.as_double();
   else if (name == "monocular.min_range_m") target.monocular.min_range_m = param.as_double();
   else if (name == "monocular.max_range_m") target.monocular.max_range_m = param.as_double();
