@@ -1,13 +1,16 @@
 #include "smart_follower_perception/frame_sync.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <optional>
 
 namespace smart_follower_perception
 {
 
-void FrameSynchronizer::configure(int cache_size)
+void FrameSynchronizer::configure(double sync_slop, int cache_size)
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  sync_slop_ = std::max(0.0, sync_slop);
   cache_size_ = std::max(1, cache_size);
 }
 
@@ -15,12 +18,14 @@ void FrameSynchronizer::clear()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   color_cache_.clear();
+  depth_cache_.clear();
 }
 
 void FrameSynchronizer::reset()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   color_cache_.clear();
+  depth_cache_.clear();
   dropped_frames_ = 0;
 }
 
@@ -33,32 +38,98 @@ void FrameSynchronizer::trim_cache_to_limit(std::deque<CachedMessage<MsgT>> & ca
   }
 }
 
+template<typename MsgT>
+std::optional<std::size_t> FrameSynchronizer::find_best_match_index(
+  const std::deque<CachedMessage<MsgT>> & cache,
+  const rclcpp::Time & target_stamp) const
+{
+  std::optional<std::size_t> best_index;
+  double best_diff = sync_slop_ + 1e-9;
+  for (std::size_t i = 0; i < cache.size(); ++i) {
+    const double diff = std::abs((cache[i].stamp - target_stamp).seconds());
+    if (diff <= sync_slop_ && diff < best_diff) {
+      best_diff = diff;
+      best_index = i;
+    }
+  }
+  return best_index;
+}
+
+template<typename MsgT>
+void FrameSynchronizer::discard_stale_front_entries(
+  std::deque<CachedMessage<MsgT>> & cache,
+  const rclcpp::Time & reference_stamp)
+{
+  while (!cache.empty() && (reference_stamp - cache.front().stamp).seconds() > sync_slop_) {
+    cache.pop_front();
+    dropped_frames_ += 1;
+  }
+}
+
 void FrameSynchronizer::push_color(const Image::SharedPtr & msg)
 {
   if (!msg) {
     return;
   }
   std::lock_guard<std::mutex> lock(mutex_);
-  color_cache_.push_back(CachedMessage<Image>{msg});
+  color_cache_.push_back(CachedMessage<Image>{msg, rclcpp::Time(msg->header.stamp)});
   trim_cache_to_limit(color_cache_);
+}
+
+void FrameSynchronizer::push_depth(const Image::SharedPtr & msg)
+{
+  if (!msg) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  depth_cache_.push_back(CachedMessage<Image>{msg, rclcpp::Time(msg->header.stamp)});
+  trim_cache_to_limit(depth_cache_);
 }
 
 bool FrameSynchronizer::pop_next(Frame & frame)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (color_cache_.empty()) {
+
+  while (true) {
+    if (color_cache_.empty() || depth_cache_.empty()) {
+      return false;
+    }
+
+    const rclcpp::Time color_stamp = color_cache_.front().stamp;
+    discard_stale_front_entries(depth_cache_, color_stamp);
+    if (color_cache_.empty() || depth_cache_.empty()) {
+      return false;
+    }
+
+    const auto depth_idx = find_best_match_index(depth_cache_, color_stamp);
+    if (depth_idx.has_value()) {
+      frame.color = color_cache_.front().msg;
+      frame.depth = depth_cache_.at(*depth_idx).msg;
+      color_cache_.pop_front();
+      depth_cache_.erase(depth_cache_.begin() + static_cast<std::ptrdiff_t>(*depth_idx));
+      return true;
+    }
+
+    const bool depth_too_old = (depth_cache_.back().stamp - color_stamp).seconds() < -sync_slop_;
+    if (depth_too_old) {
+      color_cache_.pop_front();
+      dropped_frames_ += 1;
+      continue;
+    }
     return false;
   }
-
-  frame.color = color_cache_.front().msg;
-  color_cache_.pop_front();
-  return true;
 }
 
 std::size_t FrameSynchronizer::color_size() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
   return color_cache_.size();
+}
+
+std::size_t FrameSynchronizer::depth_size() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return depth_cache_.size();
 }
 
 std::size_t FrameSynchronizer::dropped_frames() const
@@ -68,5 +139,11 @@ std::size_t FrameSynchronizer::dropped_frames() const
 }
 
 template void FrameSynchronizer::trim_cache_to_limit(std::deque<CachedMessage<Image>> & cache);
+template std::optional<std::size_t> FrameSynchronizer::find_best_match_index(
+  const std::deque<CachedMessage<Image>> & cache,
+  const rclcpp::Time & target_stamp) const;
+template void FrameSynchronizer::discard_stale_front_entries(
+  std::deque<CachedMessage<Image>> & cache,
+  const rclcpp::Time & reference_stamp);
 
 }  // namespace smart_follower_perception

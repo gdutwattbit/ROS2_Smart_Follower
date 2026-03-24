@@ -8,6 +8,7 @@ namespace smart_follower_perception
 void declare_parameters(rclcpp_lifecycle::LifecycleNode & node, const PerceptionParams & defaults)
 {
   node.declare_parameter("color_topic", defaults.color_topic);
+  node.declare_parameter("depth_topic", defaults.depth_topic);
   node.declare_parameter("person_pose_topic", defaults.person_pose_topic);
   node.declare_parameter("follow_command_topic", defaults.follow_command_topic);
   node.declare_parameter("base_frame", defaults.base_frame);
@@ -40,6 +41,7 @@ void declare_parameters(rclcpp_lifecycle::LifecycleNode & node, const Perception
   node.declare_parameter("max_miss_frames", defaults.max_miss_frames);
   node.declare_parameter("feature_buffer_size", defaults.feature_buffer_size);
   node.declare_parameter("sync_cache_size", defaults.sync_cache_size);
+  node.declare_parameter("sync_slop", defaults.sync_slop);
   node.declare_parameter("memory_sec", defaults.memory_sec);
 
   node.declare_parameter("tracking.low_score_threshold", defaults.low_score_threshold);
@@ -60,6 +62,11 @@ void declare_parameters(rclcpp_lifecycle::LifecycleNode & node, const Perception
   node.declare_parameter("monocular.camera_y_offset_m", defaults.monocular.camera_y_offset_m);
   node.declare_parameter("monocular.min_downward_angle_deg", defaults.monocular.min_downward_angle_deg);
 
+  node.declare_parameter("depth_compare.min_range_m", defaults.depth_compare.min_range_m);
+  node.declare_parameter("depth_compare.max_range_m", defaults.depth_compare.max_range_m);
+  node.declare_parameter("depth_compare.sample_window_px", defaults.depth_compare.sample_window_px);
+  node.declare_parameter("depth_compare.min_valid_samples", defaults.depth_compare.min_valid_samples);
+
   node.declare_parameter("lock.stable_frames", defaults.lock_stable_frames);
   node.declare_parameter("lock.hold_sec", defaults.lock_hold_sec);
   node.declare_parameter("lock.switch_sec", defaults.lock_switch_sec);
@@ -70,6 +77,7 @@ void declare_parameters(rclcpp_lifecycle::LifecycleNode & node, const Perception
 void load_parameters(rclcpp_lifecycle::LifecycleNode & node, PerceptionParams & params)
 {
   params.color_topic = node.get_parameter("color_topic").as_string();
+  params.depth_topic = node.get_parameter("depth_topic").as_string();
   params.person_pose_topic = node.get_parameter("person_pose_topic").as_string();
   params.follow_command_topic = node.get_parameter("follow_command_topic").as_string();
   params.base_frame = node.get_parameter("base_frame").as_string();
@@ -98,6 +106,7 @@ void load_parameters(rclcpp_lifecycle::LifecycleNode & node, PerceptionParams & 
   params.max_miss_frames = node.get_parameter("max_miss_frames").as_int();
   params.feature_buffer_size = std::max<int>(1, static_cast<int>(node.get_parameter("feature_buffer_size").as_int()));
   params.sync_cache_size = std::max<int>(1, static_cast<int>(node.get_parameter("sync_cache_size").as_int()));
+  params.sync_slop = std::max<double>(0.0, node.get_parameter("sync_slop").as_double());
   params.memory_sec = node.get_parameter("memory_sec").as_double();
 
   params.low_score_threshold = node.get_parameter("tracking.low_score_threshold").as_double();
@@ -118,6 +127,11 @@ void load_parameters(rclcpp_lifecycle::LifecycleNode & node, PerceptionParams & 
   params.monocular.camera_y_offset_m = node.get_parameter("monocular.camera_y_offset_m").as_double();
   params.monocular.min_downward_angle_deg = std::max<double>(0.0, node.get_parameter("monocular.min_downward_angle_deg").as_double());
 
+  params.depth_compare.min_range_m = node.get_parameter("depth_compare.min_range_m").as_double();
+  params.depth_compare.max_range_m = node.get_parameter("depth_compare.max_range_m").as_double();
+  params.depth_compare.sample_window_px = std::max<int>(1, static_cast<int>(node.get_parameter("depth_compare.sample_window_px").as_int()));
+  params.depth_compare.min_valid_samples = std::max<int>(1, static_cast<int>(node.get_parameter("depth_compare.min_valid_samples").as_int()));
+
   params.lock_stable_frames = std::max<int>(1, static_cast<int>(node.get_parameter("lock.stable_frames").as_int()));
   params.lock_hold_sec = node.get_parameter("lock.hold_sec").as_double();
   params.lock_switch_sec = node.get_parameter("lock.switch_sec").as_double();
@@ -129,6 +143,7 @@ void apply_parameter_override(PerceptionParams & target, const rclcpp::Parameter
 {
   const auto & name = param.get_name();
   if (name == "color_topic") target.color_topic = param.as_string();
+  else if (name == "depth_topic") target.depth_topic = param.as_string();
   else if (name == "person_pose_topic") target.person_pose_topic = param.as_string();
   else if (name == "follow_command_topic") target.follow_command_topic = param.as_string();
   else if (name == "base_frame") target.base_frame = param.as_string();
@@ -154,6 +169,7 @@ void apply_parameter_override(PerceptionParams & target, const rclcpp::Parameter
   else if (name == "max_miss_frames") target.max_miss_frames = param.as_int();
   else if (name == "feature_buffer_size") target.feature_buffer_size = std::max<int>(1, static_cast<int>(param.as_int()));
   else if (name == "sync_cache_size") target.sync_cache_size = std::max<int>(1, static_cast<int>(param.as_int()));
+  else if (name == "sync_slop") target.sync_slop = std::max<double>(0.0, param.as_double());
   else if (name == "memory_sec") target.memory_sec = param.as_double();
   else if (name == "tracking.low_score_threshold") target.low_score_threshold = param.as_double();
   else if (name == "tracking.high_score_threshold") target.high_score_threshold = param.as_double();
@@ -171,6 +187,10 @@ void apply_parameter_override(PerceptionParams & target, const rclcpp::Parameter
   else if (name == "monocular.camera_x_offset_m") target.monocular.camera_x_offset_m = param.as_double();
   else if (name == "monocular.camera_y_offset_m") target.monocular.camera_y_offset_m = param.as_double();
   else if (name == "monocular.min_downward_angle_deg") target.monocular.min_downward_angle_deg = std::max<double>(0.0, param.as_double());
+  else if (name == "depth_compare.min_range_m") target.depth_compare.min_range_m = param.as_double();
+  else if (name == "depth_compare.max_range_m") target.depth_compare.max_range_m = param.as_double();
+  else if (name == "depth_compare.sample_window_px") target.depth_compare.sample_window_px = std::max<int>(1, static_cast<int>(param.as_int()));
+  else if (name == "depth_compare.min_valid_samples") target.depth_compare.min_valid_samples = std::max<int>(1, static_cast<int>(param.as_int()));
   else if (name == "lock.stable_frames") target.lock_stable_frames = std::max<int>(1, static_cast<int>(param.as_int()));
   else if (name == "lock.hold_sec") target.lock_hold_sec = param.as_double();
   else if (name == "lock.switch_sec") target.lock_switch_sec = param.as_double();

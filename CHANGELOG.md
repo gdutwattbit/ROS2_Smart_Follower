@@ -4,6 +4,22 @@
 
 ## Unreleased
 
+## beta-0.2.0 - 2026-03-24
+
+### Changed
+- 从 `dev-0.1.8` 收口到 `beta-0.2.0`：保留轻量模型、控制修复与调试工具链，同时恢复主链路 color+depth 定位用于实车对照
+- perception 恢复 `/camera/depth/image_raw` 输入、color/depth 时间同步与 depth 取样定位；`/person_pose` 外部接口保持不变
+- `smart_follower.launch.py` 默认打开 depth 与 depth registration，当前默认运行组合为 `yolo26n_static_256x320_simplify_e2e.onnx + osnet_x0_5_512.onnx`
+- perception 节点修复 Astra `/camera/get_camera_info` 内参判定逻辑，现可正确加载真实 `fx/fy/cx/cy`，不再误回退到 fallback
+
+### Added
+- 新增 `depth_compare.*` 采样参数与 depth diagnostics（`depth_ready`、`depth_samples_valid`、`last_valid_depth_m`、`depth_position_ms` 等）
+
+### Verified
+- VM 端完整编译与测试通过（43 tests, 0 failures）
+- 小车容器端已完成重新同步、重新编译与启动烟测；确认 ONNX Runtime 真正生效、Astra color/depth 主链路可正常启动
+- 实车联调确认当前版本已可运行跟随；YOLO `intra=2` 实测为负优化，已恢复默认 `intra=1`
+
 ## dev-0.1.8 - 2026-03-24
 
 ### Changed

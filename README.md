@@ -4,45 +4,45 @@
 
 当前主线能力：
 - 感知侧：YOLO + ReID + 多目标跟踪 + 锁定策略
-- 定位侧：**纯 RGB 单目位置估计**（Astra 内参 + bbox 底点地面投影）
+- 定位侧：**depth compare 分支默认走 RGB + depth 取样定位**（保留 `dev-0.1.8` 的轻量模型与控制修复）
 - 控制侧：20Hz 跟随控制、短时预测补帧、超声波避障、速度仲裁
 
-> 当前开发标签：`dev-0.1.8`
+> 当前发布标签：`beta-0.2.0`
 > 
-> 当前运行时基线：`alpha-0.1.7`
+> 当前发布基线：`dev-0.1.8-depth-compare`
 > 
-> 当前主线形态：**纯 RGB + 单目位置估计 + 左右超声波避障**
+> 当前默认形态：**轻量模型 + depth compare 主链路 + 已修复真实 Astra 内参加载**
 
 ---
 
 ## 1. 当前链路概览
 
 ```text
-/camera/color/image_raw
-        ↓
-      YOLO
-        ↓
-      ReID
-        ↓
-     Tracker
-        ↓
-   Lock Manager
-        ↓
-单目位置估计（bbox 底点地面投影）
-        ↓
-    /person_pose
+/camera/color/image_raw + /camera/depth/image_raw
+                    ↓
+                  YOLO
+                    ↓
+                  ReID
+                    ↓
+                 Tracker
+                    ↓
+               Lock Manager
+                    ↓
+      depth 取样定位（bbox 下半部窗口 + median）
+                    ↓
+                /person_pose
         ↓
 Follower / Obstacle / Arbiter
         ↓
       /cmd_vel
 ```
 
-当前版本的重要设计点：
-- perception 主链路只消费彩色图，不再依赖 depth 主链路
-- 单目定位优先调用 Astra 的 `/camera/get_camera_info` 获取真实内参
-- 若服务不可用，则自动退回到 `horizontal_fov_deg` 的 fallback 近似内参
-- `TrackedPerson.position` 为 base frame 下的位置估计结果
-- `TrackedPerson.appearance_feature` 已收口为与当前 OSNet 一致的 `512` 维
+beta-0.2.0 当前设计要点：
+- 这是 `dev-0.1.8` 上的 depth compare 分支：恢复 depth 主链路定位，但不回退当前轻量模型、控制修复与消息裁剪
+- YOLO / ReID / Tracker / Lock Manager 保持 `dev-0.1.8` 现状
+- `TrackedPerson.position` 改为由对齐 depth 图采样得到，`/person_pose` 外部接口保持不变
+- 内参仍优先调用 Astra 的 `/camera/get_camera_info` 获取；不可用时仍可 fallback
+- `TrackedPerson.appearance_feature` 保持当前 OSNet 对应的 `512` 维
 
 ---
 
@@ -77,12 +77,12 @@ ros2_smart_follower/
 
 ### `smart_follower_perception`
 负责：
-- 彩色图像接入
+- 彩色图像 + 深度图接入
 - YOLO 检测
 - ReID 特征提取
 - 多目标跟踪
 - 目标锁定 / 切人策略
-- 单目位置估计
+- depth 取样定位 / depth compare
 - 发布 `/person_pose`
 
 ### `smart_follower_control`

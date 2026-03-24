@@ -21,28 +21,27 @@ FrameSynchronizer::Image::SharedPtr make_image(double t_sec)
 
 }  // namespace
 
-TEST(FrameSync, PopsQueuedColorFramesInOrder)
+TEST(FrameSync, PopsColorDepthPairWithinSlop)
 {
   FrameSynchronizer sync;
-  sync.configure(6);
+  sync.configure(0.04, 6);
 
-  auto color1 = make_image(1.000);
-  auto color2 = make_image(1.010);
-  sync.push_color(color1);
-  sync.push_color(color2);
+  auto color = make_image(1.000);
+  auto depth = make_image(1.015);
+  sync.push_color(color);
+  sync.push_depth(depth);
 
   FrameSynchronizer::Frame frame;
   ASSERT_TRUE(sync.pop_next(frame));
-  EXPECT_EQ(frame.color.get(), color1.get());
-  ASSERT_TRUE(sync.pop_next(frame));
-  EXPECT_EQ(frame.color.get(), color2.get());
+  EXPECT_EQ(frame.color.get(), color.get());
+  EXPECT_EQ(frame.depth.get(), depth.get());
   EXPECT_FALSE(sync.pop_next(frame));
 }
 
 TEST(FrameSync, CacheTrimIncrementsDropped)
 {
   FrameSynchronizer sync;
-  sync.configure(3);
+  sync.configure(0.04, 3);
 
   sync.push_color(make_image(1.0));
   sync.push_color(make_image(1.1));

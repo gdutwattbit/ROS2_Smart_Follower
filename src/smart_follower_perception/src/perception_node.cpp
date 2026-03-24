@@ -72,6 +72,7 @@ private:
       intrinsics.cx = info.k[2];
       intrinsics.cy = info.k[5];
     }
+    intrinsics.ready = true;
     intrinsics.ready = is_valid_camera_intrinsics(intrinsics);
     return intrinsics;
   }
@@ -100,7 +101,7 @@ private:
     lock_config.target_area_ratio = params_.lock_target_area_ratio;
     lock_manager_.configure(lock_config);
 
-    frame_sync_.configure(params_.sync_cache_size);
+    frame_sync_.configure(params_.sync_slop, params_.sync_cache_size);
   }
 
   void configure_models()
@@ -328,6 +329,7 @@ private:
     }
 
     color_sub_.reset();
+    depth_sub_.reset();
     command_sub_.reset();
     person_pub_.reset();
     frame_sync_.clear();
@@ -346,6 +348,11 @@ private:
       rclcpp::SensorDataQoS(),
       std::bind(&PerceptionNode::on_color_message, this, std::placeholders::_1));
 
+    depth_sub_ = this->create_subscription<Image>(
+      params_.depth_topic,
+      rclcpp::SensorDataQoS(),
+      std::bind(&PerceptionNode::on_depth_message, this, std::placeholders::_1));
+
     if (was_active) {
       person_pub_->on_activate();
     }
@@ -357,11 +364,14 @@ private:
       get_logger(),
       *get_clock(),
       2000,
-      "[%s] raw_input color=%zu cache=%zu last_stamp=%.3f",
+      "[%s] raw_input color=%zu depth=%zu cache=(%zu,%zu) last_stamp=(%.3f, %.3f)",
       kRuntimeVersion,
       stats_.raw_color_count,
+      stats_.raw_depth_count,
       frame_sync_.color_size(),
-      PerceptionDiagnostics::stamp_seconds_or_negative(stats_.last_color_msg_stamp));
+      frame_sync_.depth_size(),
+      PerceptionDiagnostics::stamp_seconds_or_negative(stats_.last_color_msg_stamp),
+      PerceptionDiagnostics::stamp_seconds_or_negative(stats_.last_depth_msg_stamp));
   }
 
   void try_process_cached_frames()
@@ -374,7 +384,7 @@ private:
     FrameSynchronizer::Frame frame;
     while (frame_sync_.pop_next(frame)) {
       pipeline_.enqueue_synchronized_frame(
-        SynchronizedFrame{frame.color},
+        SynchronizedFrame{frame.color, frame.depth},
         this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
     }
   }
@@ -388,6 +398,18 @@ private:
     stats_.raw_color_count += 1;
     stats_.last_color_msg_stamp = rclcpp::Time(msg->header.stamp);
     frame_sync_.push_color(msg);
+    log_raw_input_status();
+    try_process_cached_frames();
+  }
+
+  void on_depth_message(const Image::SharedPtr msg)
+  {
+    if (!msg) {
+      return;
+    }
+    stats_.raw_depth_count += 1;
+    stats_.last_depth_msg_stamp = rclcpp::Time(msg->header.stamp);
+    frame_sync_.push_depth(msg);
     log_raw_input_status();
     try_process_cached_frames();
   }
@@ -458,12 +480,18 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "[%s] parameters hot-reloaded: color=%s person_pose=%s yolo=%s reid=%s mono=(service=%s cam_h=%.2f pitch=%.1f x=%.2f y=%.2f min_down=%.1f hfov=%.1f min=%.2f max=%.2f) intrinsics=(src=%s ready=%d fx=%.2f fy=%.2f cx=%.2f cy=%.2f size=%dx%d) yolo_ort=(intra=%d inter=%d mode=%s) reid_ort=(intra=%d inter=%d mode=%s)",
+      "[%s] parameters hot-reloaded: color=%s depth=%s person_pose=%s yolo=%s reid=%s sync_slop=%.3f depth_compare=(min=%.2f max=%.2f window=%d min_valid=%d) mono=(service=%s cam_h=%.2f pitch=%.1f x=%.2f y=%.2f min_down=%.1f hfov=%.1f min=%.2f max=%.2f) intrinsics=(src=%s ready=%d fx=%.2f fy=%.2f cx=%.2f cy=%.2f size=%dx%d) yolo_ort=(intra=%d inter=%d mode=%s) reid_ort=(intra=%d inter=%d mode=%s)",
       kRuntimeVersion,
       params_.color_topic.c_str(),
+      params_.depth_topic.c_str(),
       params_.person_pose_topic.c_str(),
       params_.yolo_model_path.c_str(),
       params_.reid_model_path.c_str(),
+      params_.sync_slop,
+      params_.depth_compare.min_range_m,
+      params_.depth_compare.max_range_m,
+      params_.depth_compare.sample_window_px,
+      params_.depth_compare.min_valid_samples,
       params_.monocular.camera_info_service.c_str(),
       params_.monocular.camera_height_m,
       params_.monocular.camera_pitch_deg,
@@ -541,11 +569,17 @@ private:
       params_.reid_ort.execution_mode_parallel ? "parallel" : "sequential");
     RCLCPP_INFO(
       get_logger(),
-      "[%s] input topic color=%s person_pose=%s cache_size=%d mono=(service=%s cam_h=%.2f pitch=%.1f x=%.2f y=%.2f min_down=%.1f hfov=%.1f min=%.2f max=%.2f) intrinsics=(src=%s ready=%d fx=%.2f fy=%.2f cx=%.2f cy=%.2f size=%dx%d)",
+      "[%s] input topic color=%s depth=%s person_pose=%s sync_slop=%.3f cache_size=%d depth_compare=(min=%.2f max=%.2f window=%d min_valid=%d) mono=(service=%s cam_h=%.2f pitch=%.1f x=%.2f y=%.2f min_down=%.1f hfov=%.1f min=%.2f max=%.2f) intrinsics=(src=%s ready=%d fx=%.2f fy=%.2f cx=%.2f cy=%.2f size=%dx%d)",
       kRuntimeVersion,
       params_.color_topic.c_str(),
+      params_.depth_topic.c_str(),
       params_.person_pose_topic.c_str(),
+      params_.sync_slop,
       params_.sync_cache_size,
+      params_.depth_compare.min_range_m,
+      params_.depth_compare.max_range_m,
+      params_.depth_compare.sample_window_px,
+      params_.depth_compare.min_valid_samples,
       params_.monocular.camera_info_service.c_str(),
       params_.monocular.camera_height_m,
       params_.monocular.camera_pitch_deg,
@@ -601,6 +635,7 @@ private:
     pipeline_.stop_detection_worker();
     pipeline_.clear_async_state();
     color_sub_.reset();
+    depth_sub_.reset();
     command_sub_.reset();
     person_pub_.reset();
     frame_sync_.reset();
@@ -629,6 +664,7 @@ private:
     person_pub_;
   rclcpp::Subscription<smart_follower_msgs::msg::FollowCommand>::SharedPtr command_sub_;
   rclcpp::Subscription<Image>::SharedPtr color_sub_;
+  rclcpp::Subscription<Image>::SharedPtr depth_sub_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
 
   bool diagnostics_registered_{false};

@@ -87,21 +87,27 @@ double PerceptionPipelineProfile::avg_detect_interval() const
 void PerceptionDiagnostics::reset()
 {
   raw_color_count = 0;
+  raw_depth_count = 0;
   queued_color_count = 0;
   skipped_synced_frame_count = 0;
   person_pose_publish_count = 0;
   last_detection_count = 0;
   position_valid_count = 0;
   position_invalid_count = 0;
+  last_depth_samples_valid = 0;
+  depth_invalid_count = 0;
   intrinsics_ready = false;
   intrinsics_source = "uninitialized";
+  depth_source_mode = "depth_compare";
   camera_fx = 0.0;
   camera_fy = 0.0;
   camera_cx = 0.0;
   camera_cy = 0.0;
+  last_valid_depth_m = -1.0;
   processed_frame_counter = 0;
   last_infer_ms = 0.0;
   last_color_msg_stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  last_depth_msg_stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
   last_person_pose_publish_stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
   profile.reset();
 }
@@ -128,24 +134,30 @@ void PerceptionDiagnostics::fill_status(
   const rclcpp::Time & now) const
 {
   const double color_age = age_seconds_or_negative(last_color_msg_stamp, now);
+  const double depth_age = age_seconds_or_negative(last_depth_msg_stamp, now);
   const double publish_age = age_seconds_or_negative(last_person_pose_publish_stamp, now);
   const std::size_t total_positions = position_valid_count + position_invalid_count;
   const double invalid_ratio = total_positions > 0 ?
     static_cast<double>(position_invalid_count) / static_cast<double>(total_positions) : 0.0;
+  const bool depth_ready = raw_depth_count > 0 && depth_age >= 0.0 && depth_age <= 2.0;
 
   stat.add("active_tracks", static_cast<int>(active_tracks));
   stat.add("last_detection_count", static_cast<int>(last_detection_count));
   stat.add("dropped_color_frames", static_cast<int>(sync_dropped));
   stat.add("raw_color_count", static_cast<int>(raw_color_count));
+  stat.add("raw_depth_count", static_cast<int>(raw_depth_count));
   stat.add("queued_color_count", static_cast<int>(queued_color_count));
   stat.add("skipped_color_frame_count", static_cast<int>(skipped_synced_frame_count));
   stat.add("processed_frame_count", processed_frame_counter);
   stat.add("person_pose_publish_count", static_cast<int>(person_pose_publish_count));
   stat.add("last_infer_ms", last_infer_ms);
   stat.add("last_color_age_s", color_age);
+  stat.add("last_depth_age_s", depth_age);
   stat.add("last_person_pose_publish_age_s", publish_age);
   stat.add("intrinsics_ready", intrinsics_ready);
   stat.add("intrinsics_source", intrinsics_source);
+  stat.add("depth_ready", depth_ready);
+  stat.add("depth_source_mode", depth_source_mode);
   stat.add("camera_fx", camera_fx);
   stat.add("camera_fy", camera_fy);
   stat.add("camera_cx", camera_cx);
@@ -153,6 +165,10 @@ void PerceptionDiagnostics::fill_status(
   stat.add("position_valid_count", static_cast<int>(position_valid_count));
   stat.add("position_invalid_count", static_cast<int>(position_invalid_count));
   stat.add("position_invalid_ratio", invalid_ratio);
+  stat.add("depth_samples_valid", static_cast<int>(last_depth_samples_valid));
+  stat.add("depth_invalid_count", static_cast<int>(depth_invalid_count));
+  stat.add("last_valid_depth_m", last_valid_depth_m);
+  stat.add("depth_position_ms", profile.last_position_projection_ms);
   stat.add("position_projection_ms", profile.last_position_projection_ms);
   stat.add("profile_samples", static_cast<int>(profile.sample_count));
   stat.add("profile_detect_frames", static_cast<int>(profile.detect_frame_count));
@@ -179,6 +195,7 @@ void PerceptionDiagnostics::fill_status(
   stat.add("profile_avg_recover_ms", profile.avg(profile.sum_recover_ms));
   stat.add("profile_avg_tracking_ms", profile.avg(profile.sum_tracking_ms));
   stat.add("profile_avg_lock_ms", profile.avg(profile.sum_lock_ms));
+  stat.add("profile_avg_depth_position_ms", profile.avg(profile.sum_position_projection_ms));
   stat.add("profile_avg_position_projection_ms", profile.avg(profile.sum_position_projection_ms));
   stat.add("profile_avg_message_fill_ms", profile.avg(profile.sum_message_fill_ms));
   stat.add("profile_avg_message_ms", profile.avg(profile.sum_message_ms));
@@ -221,6 +238,14 @@ void PerceptionDiagnostics::fill_status(
     raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Color input delayed");
   }
 
+  if (raw_depth_count == 0 || depth_age < 0.0) {
+    raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Waiting for depth input");
+  } else if (depth_age > 2.0) {
+    raise(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "Depth input stale");
+  } else if (depth_age > 0.5) {
+    raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Depth input delayed");
+  }
+
   if (person_pose_publish_count == 0) {
     if (queued_color_count > 0) {
       raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Waiting for first person_pose publish");
@@ -232,7 +257,7 @@ void PerceptionDiagnostics::fill_status(
   }
 
   if (total_positions >= 10 && invalid_ratio > 0.8) {
-    raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Ground projection failing frequently");
+    raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Depth positioning failing frequently");
   }
 
   stat.summary(level, message);

@@ -17,7 +17,7 @@ bool run_detection_work_item(
   const rclcpp::Logger & logger,
   rclcpp::Clock & clock)
 {
-  if (!item.frame.color) {
+  if (!item.frame.color || !item.frame.depth) {
     return false;
   }
 
@@ -30,6 +30,8 @@ bool run_detection_work_item(
   result.processing_begin = SteadyClock::now();
   result.stamp = rclcpp::Time(item.frame.color->header.stamp);
   result.color_header = item.frame.color->header;
+  result.depth_header = item.frame.depth->header;
+  result.depth_frame = item.frame.depth;
   result.run_detect = item.run_detect;
 
   cv::Mat color;
@@ -79,9 +81,11 @@ bool run_detection_work_item(
 
 smart_follower_msgs::msg::TrackedPerson track_to_message(
   const Track & track,
+  const cv::Mat & depth_image,
   const cv::Size & image_size,
   const MonocularCameraIntrinsics & intrinsics,
   const MonocularPositionConfig & monocular,
+  const DepthPositionConfig & depth_config,
   MessageBuildStats * stats)
 {
   using SteadyClock = std::chrono::steady_clock;
@@ -100,17 +104,26 @@ smart_follower_msgs::msg::TrackedPerson track_to_message(
   msg.bbox.width = static_cast<uint32_t>(std::max(0.0F, track.bbox.width));
   msg.bbox.height = static_cast<uint32_t>(std::max(0.0F, track.bbox.height));
 
+  DepthSampleResult sample;
   const auto position_begin = SteadyClock::now();
-  auto position = estimate_person_position_from_bbox(track.bbox, intrinsics, monocular);
+  auto position = estimate_person_position_from_depth_bbox(
+    track.bbox,
+    depth_image,
+    intrinsics,
+    monocular,
+    depth_config,
+    &sample);
   const auto position_end = SteadyClock::now();
   if (stats != nullptr) {
     stats->position_projection_ms += elapsed_ms(position_begin, position_end);
+    stats->depth_samples_valid += static_cast<std::size_t>(std::max(0, sample.valid_samples));
   }
 
   if (position.has_value()) {
     msg.position = *position;
     if (stats != nullptr) {
       stats->position_success_count += 1;
+      stats->last_valid_depth_m = sample.valid ? sample.depth_m : stats->last_valid_depth_m;
     }
   } else {
     const double nan = std::numeric_limits<double>::quiet_NaN();
@@ -132,11 +145,13 @@ smart_follower_msgs::msg::TrackedPerson track_to_message(
 PersonPoseBuildResult build_person_pose_array(
   const std::unordered_map<int, Track> & tracks,
   const std_msgs::msg::Header & color_header,
+  const cv::Mat & depth_image,
   const cv::Size & image_size,
   int lock_id,
   uint8_t lock_state,
   const MonocularCameraIntrinsics & intrinsics,
   const MonocularPositionConfig & monocular,
+  const DepthPositionConfig & depth_config,
   const std::string & base_frame)
 {
   using SteadyClock = std::chrono::steady_clock;
@@ -154,7 +169,14 @@ PersonPoseBuildResult build_person_pose_array(
 
   const auto message_fill_begin = SteadyClock::now();
   for (const auto & kv : tracks) {
-    out.persons.push_back(track_to_message(kv.second, image_size, intrinsics, monocular, &result.stats));
+    out.persons.push_back(track_to_message(
+      kv.second,
+      depth_image,
+      image_size,
+      intrinsics,
+      monocular,
+      depth_config,
+      &result.stats));
   }
   const auto message_fill_end = SteadyClock::now();
   result.stats.message_fill_ms = elapsed_ms(message_fill_begin, message_fill_end);

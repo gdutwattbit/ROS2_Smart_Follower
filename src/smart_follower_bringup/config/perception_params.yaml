@@ -1,6 +1,7 @@
-﻿/**:
+/**:
   ros__parameters:
     color_topic: /camera/color/image_raw
+    depth_topic: /camera/depth/image_raw
     person_pose_topic: person_pose
     follow_command_topic: follow_command
     base_frame: base_footprint
@@ -33,6 +34,7 @@
     max_miss_frames: 10
     feature_buffer_size: 20
     sync_cache_size: 6
+    sync_slop: 0.04
     memory_sec: 30.0
 
     tracking:
@@ -55,6 +57,12 @@
       camera_x_offset_m: 0.175
       camera_y_offset_m: 0.01
       min_downward_angle_deg: 2.0
+
+    depth_compare:
+      min_range_m: 0.20
+      max_range_m: 4.00
+      sample_window_px: 5
+      min_valid_samples: 3
 
     lock:
       stable_frames: 5

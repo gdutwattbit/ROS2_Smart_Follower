@@ -15,6 +15,7 @@ namespace smart_follower_perception
 struct PerceptionParams
 {
   std::string color_topic{"/camera/color/image_raw"};
+  std::string depth_topic{"/camera/depth/image_raw"};
   std::string person_pose_topic{"person_pose"};
   std::string follow_command_topic{"follow_command"};
   std::string base_frame{"base_footprint"};
@@ -28,6 +29,7 @@ struct PerceptionParams
   int feature_buffer_size{20};
   int sync_cache_size{6};
   int lock_stable_frames{5};
+  float sync_slop{0.04F};
   float lock_hold_sec{0.6F};
   float lock_switch_sec{2.0F};
   float memory_sec{30.0F};
@@ -49,6 +51,7 @@ struct PerceptionParams
   OrtRuntimeConfig reid_ort{1, 1, false};
   CostWeights weights;
   MonocularPositionConfig monocular;
+  DepthPositionConfig depth_compare;
 };
 
 void declare_parameters(rclcpp_lifecycle::LifecycleNode & node, const PerceptionParams & defaults);

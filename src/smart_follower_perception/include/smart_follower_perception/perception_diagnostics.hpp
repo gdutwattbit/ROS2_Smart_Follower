@@ -68,21 +68,27 @@ struct PerceptionPipelineProfile
 struct PerceptionDiagnostics
 {
   std::size_t raw_color_count{0};
+  std::size_t raw_depth_count{0};
   std::size_t queued_color_count{0};
   std::size_t skipped_synced_frame_count{0};
   std::size_t person_pose_publish_count{0};
   std::size_t last_detection_count{0};
   std::size_t position_valid_count{0};
   std::size_t position_invalid_count{0};
+  std::size_t last_depth_samples_valid{0};
+  std::size_t depth_invalid_count{0};
   bool intrinsics_ready{false};
   std::string intrinsics_source{"uninitialized"};
+  std::string depth_source_mode{"depth_compare"};
   double camera_fx{0.0};
   double camera_fy{0.0};
   double camera_cx{0.0};
   double camera_cy{0.0};
+  double last_valid_depth_m{-1.0};
   int processed_frame_counter{0};
   double last_infer_ms{0.0};
   rclcpp::Time last_color_msg_stamp{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_depth_msg_stamp{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_person_pose_publish_stamp{0, 0, RCL_ROS_TIME};
   PerceptionPipelineProfile profile{};
 

@@ -3,6 +3,7 @@
 #include <chrono>
 #include <utility>
 
+#include <cv_bridge/cv_bridge.h>
 #include <lifecycle_msgs/msg/state.hpp>
 
 #include "smart_follower_perception/constants.hpp"
@@ -17,6 +18,30 @@ using Clock = std::chrono::steady_clock;
 double elapsed_ms(const Clock::time_point & begin, const Clock::time_point & end)
 {
   return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+
+bool convert_depth_message(
+  const Image::SharedPtr & depth_msg,
+  cv::Mat & depth_image,
+  const rclcpp::Logger & logger,
+  rclcpp::Clock & clock)
+{
+  if (!depth_msg) {
+    return false;
+  }
+
+  try {
+    if (depth_msg->encoding == "16UC1" || depth_msg->encoding == "32FC1") {
+      depth_image = cv_bridge::toCvShare(depth_msg, depth_msg->encoding)->image;
+    } else {
+      depth_image = cv_bridge::toCvShare(depth_msg)->image;
+    }
+    return !depth_image.empty();
+  } catch (const cv_bridge::Exception & ex) {
+    RCLCPP_ERROR_THROTTLE(logger, clock, 2000, "depth cv_bridge error: %s", ex.what());
+    depth_image.release();
+    return false;
+  }
 }
 
 }  // namespace
@@ -50,7 +75,7 @@ PerceptionPipeline::~PerceptionPipeline()
 
 bool PerceptionPipeline::enqueue_synchronized_frame(const SynchronizedFrame & synced_frame, bool active)
 {
-  if (!active || !synced_frame.color) {
+  if (!active || !synced_frame.color || !synced_frame.depth) {
     return false;
   }
 
@@ -62,7 +87,7 @@ bool PerceptionPipeline::enqueue_synchronized_frame(const SynchronizedFrame & sy
       logger_,
       clock_,
       2000,
-      "[%s] color callback queued=%zu processed=%d run_pipeline=0",
+      "[%s] color/depth callback queued=%zu processed=%d run_pipeline=0",
       kRuntimeVersion,
       stats_.queued_color_count,
       stats_.processed_frame_counter);
@@ -75,7 +100,7 @@ bool PerceptionPipeline::enqueue_synchronized_frame(const SynchronizedFrame & sy
     logger_,
     clock_,
     2000,
-    "[%s] color callback queued=%zu scheduled=%d processed=%d run_pipeline=1 run_detect=%d",
+    "[%s] color/depth callback queued=%zu scheduled=%d processed=%d run_pipeline=1 run_detect=%d",
     kRuntimeVersion,
     stats_.queued_color_count,
     scheduled_frame_counter_,
@@ -239,15 +264,20 @@ void PerceptionPipeline::process_detection_result(
   lock_manager_.update(tracker_.tracks(), result.image_size, result.stamp);
   const auto lock_end = Clock::now();
 
+  cv::Mat depth_image;
+  convert_depth_message(result.depth_frame, depth_image, logger_, clock_);
+
   const auto message_begin = Clock::now();
   auto pose_build = build_person_pose_array(
     tracker_.tracks(),
     result.color_header,
+    depth_image,
     result.image_size,
     lock_manager_.lock_id(),
     lock_manager_.lock_state(),
     intrinsics_,
     params_.monocular,
+    params_.depth_compare,
     params_.base_frame);
   const auto message_end = Clock::now();
   auto & out = pose_build.msg;
@@ -283,6 +313,11 @@ void PerceptionPipeline::process_detection_result(
   stats_.last_infer_ms = total_ms;
   stats_.position_valid_count += pose_build.stats.position_success_count;
   stats_.position_invalid_count += pose_build.stats.position_failure_count;
+  stats_.last_depth_samples_valid = pose_build.stats.depth_samples_valid;
+  stats_.depth_invalid_count += pose_build.stats.position_failure_count;
+  if (pose_build.stats.last_valid_depth_m > 0.0) {
+    stats_.last_valid_depth_m = pose_build.stats.last_valid_depth_m;
+  }
   stats_.profile.observe(
     result.cv_bridge_ms,
     result.yolo_ms,
@@ -303,7 +338,7 @@ void PerceptionPipeline::process_detection_result(
     logger_,
     clock_,
     5000,
-    "[%s] profile avg_ms total=%.2f cv_bridge=%.2f yolo=%.2f reid=%.2f recover=%.2f tracking=%.2f lock=%.2f projection=%.2f msg_fill=%.2f message=%.2f publish=%.2f | last_ms total=%.2f yolo=%.2f reid=%.2f projection=%.2f message=%.2f det=%zu tracks=%zu run_detect=%d",
+    "[%s] profile avg_ms total=%.2f cv_bridge=%.2f yolo=%.2f reid=%.2f recover=%.2f tracking=%.2f lock=%.2f depth_position=%.2f msg_fill=%.2f message=%.2f publish=%.2f | last_ms total=%.2f yolo=%.2f reid=%.2f depth_position=%.2f message=%.2f det=%zu tracks=%zu run_detect=%d",
     kRuntimeVersion,
     stats_.profile.avg(stats_.profile.sum_total_ms),
     stats_.profile.avg(stats_.profile.sum_cv_bridge_ms),
