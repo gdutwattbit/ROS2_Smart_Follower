@@ -2,10 +2,8 @@
 set -euo pipefail
 
 ROS_DISTRO="${ROS_DISTRO:-humble}"
-WITH_TRAINING=0
 WITH_GPIO=1
 WITH_ONNXRUNTIME=1
-WITH_UV=1
 INSTALL_ROS=0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,15 +16,15 @@ else
 fi
 
 log() {
-  echo -e "[1;32m[INFO][0m $*"
+  echo -e "\033[1;32m[INFO]\033[0m $*"
 }
 
 warn() {
-  echo -e "[1;33m[WARN][0m $*" >&2
+  echo -e "\033[1;33m[WARN]\033[0m $*" >&2
 }
 
 die() {
-  echo -e "[1;31m[ERROR][0m $*" >&2
+  echo -e "\033[1;31m[ERROR]\033[0m $*" >&2
   exit 1
 }
 
@@ -35,10 +33,8 @@ show_help() {
 用法: bash scripts/install_dependencies.sh [选项]
 
 选项:
-  --with-training        安装模型训练相关 Python 工具链依赖（train 组，不含 export）
   --without-gpio         跳过 libgpiod 安装
   --without-onnxruntime  跳过 ONNX Runtime 安装尝试
-  --without-uv           跳过 uv 安装与 uv sync
   --install-ros          若系统未安装 ROS，则尝试通过 apt 安装 ros-$ROS_DISTRO-desktop
   -h, --help             显示帮助
 EOF
@@ -46,20 +42,12 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --with-training)
-      WITH_TRAINING=1
-      shift
-      ;;
     --without-gpio)
       WITH_GPIO=0
       shift
       ;;
     --without-onnxruntime)
       WITH_ONNXRUNTIME=0
-      shift
-      ;;
-    --without-uv)
-      WITH_UV=0
       shift
       ;;
     --install-ros)
@@ -139,7 +127,9 @@ fi
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
 
 if ! dpkg -s python3-ament-index-python >/dev/null 2>&1; then
-  install_if_available python3-ament-index-python ||   install_if_available "ros-${ROS_DISTRO}-ament-index-python" ||   warn "未找到 ament_index_python 对应系统包，请在 ROS 环境中确认该模块可用"
+  install_if_available python3-ament-index-python || \
+    install_if_available "ros-${ROS_DISTRO}-ament-index-python" || \
+    warn "未找到 ament_index_python 对应系统包，请在 ROS 环境中确认该模块可用"
 fi
 
 if [[ "${WITH_ONNXRUNTIME}" -eq 1 ]]; then
@@ -160,39 +150,28 @@ log "更新 rosdep 数据库"
 rosdep update
 
 log "通过 rosdep 安装工作区依赖（跳过 turn_on_wheeltec_robot）"
-rosdep install   --from-paths src   --ignore-src   --rosdistro "${ROS_DISTRO}"   -r -y   --skip-keys="turn_on_wheeltec_robot"
-
-if [[ "${WITH_UV}" -eq 1 ]]; then
-  if ! command -v uv >/dev/null 2>&1; then
-    log "安装 uv"
-    curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL="${HOME}/.local/bin" sh
-    export PATH="${HOME}/.local/bin:${PATH}"
-  fi
-
-  if [[ "${WITH_TRAINING}" -eq 1 ]]; then
-    log "使用 uv 安装训练前置依赖（train 组，PyTorch 固定为 CPU-only）"
-    uv sync --group train --no-managed-python
-  else
-    log "使用 uv 安装最小模型校验依赖（validate 组）"
-    uv sync --group validate --no-managed-python
-  fi
-fi
+rosdep install \
+  --from-paths src \
+  --ignore-src \
+  --rosdistro "${ROS_DISTRO}" \
+  -r -y \
+  --skip-keys="turn_on_wheeltec_robot"
 
 mkdir -p models
 
-if [[ ! -f models/yolo26n.onnx ]]; then
-  warn "未找到 models/yolo26n.onnx"
+if [[ ! -f models/yolo26n_static_256x320_simplify_e2e.onnx ]]; then
+  warn "未找到 models/yolo26n_static_256x320_simplify_e2e.onnx"
 fi
 
-if [[ ! -f models/reid_resnet50_2048.onnx ]]; then
-  warn "未找到 models/reid_resnet50_2048.onnx"
+if [[ ! -f models/osnet_x0_5_512.onnx ]]; then
+  warn "未找到 models/osnet_x0_5_512.onnx"
 fi
 
-warn "若未安装 turn_on_wheeltec_robot，请使用 smart_follower_only.launch.py，而不是 smart_follower.launch.py"
+warn "若未安装 turn_on_wheeltec_robot，可使用 smart_follower.launch.py bringup_robot:=false 仅启动本项目链路"
 
 log "依赖安装完成"
 log "下一步可执行:"
 echo "  source /opt/ros/${ROS_DISTRO}/setup.bash"
 echo "  colcon build --symlink-install"
 echo "  source install/setup.bash"
-echo "  ros2 launch smart_follower_bringup smart_follower_only.launch.py robot_ns:=robot1"
+echo "  ros2 launch smart_follower_bringup smart_follower.launch.py robot_ns:=robot1 bringup_robot:=false bringup_camera:=false"

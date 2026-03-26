@@ -226,8 +226,6 @@ void PerceptionDiagnostics::fill_status(
 
   if (!intrinsics_ready) {
     raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Waiting for camera intrinsics");
-  } else if (intrinsics_source != "service") {
-    raise(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Using fallback camera intrinsics");
   }
 
   if (raw_color_count == 0 || color_age < 0.0) {

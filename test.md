@@ -1,4 +1,13 @@
-﻿# ROS2 Smart Follower 小车端 Profiling 测试报告
+> 归档说明（2026-03-26）
+>
+> 本文件主要保存阶段性实验记录、性能对比和历史排障过程，**不再作为当前主线说明文档**。
+> 当前以以下文件为准：
+> - `README.md`
+> - `try.md`
+> - `当前推荐运行组合.md`
+>
+> 当前固定技术路线：Astra color+depth + `/camera/get_camera_info` + depth compare 主链路。
+# ROS2 Smart Follower 小车端 Profiling 测试报告
 
 测试时间：2026-03-18  
 测试目的：获取感知链路各阶段耗时，定位当前推理瓶颈，并对比两种 ReID 模型的实际效果。

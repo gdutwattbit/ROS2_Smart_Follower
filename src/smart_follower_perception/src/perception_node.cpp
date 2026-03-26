@@ -157,35 +157,6 @@ private:
     }
   }
 
-  cv::Size preferred_fallback_image_size() const
-  {
-    if (monocular_intrinsics_.image_width > 0 && monocular_intrinsics_.image_height > 0) {
-      return cv::Size(monocular_intrinsics_.image_width, monocular_intrinsics_.image_height);
-    }
-    return cv::Size(params_.yolo_input_w, params_.yolo_input_h);
-  }
-
-  void apply_fallback_intrinsics(const cv::Size & image_size, bool log_result)
-  {
-    const auto fallback = make_fallback_camera_intrinsics(image_size, params_.monocular);
-    set_intrinsics(fallback, "fallback", false);
-    if (log_result) {
-      RCLCPP_WARN(
-        get_logger(),
-        "[%s] camera intrinsics fallback activated service=%s ready=%d fx=%.2f fy=%.2f cx=%.2f cy=%.2f size=%dx%d hfov=%.1f",
-        kRuntimeVersion,
-        params_.monocular.camera_info_service.c_str(),
-        stats_.intrinsics_ready ? 1 : 0,
-        monocular_intrinsics_.fx,
-        monocular_intrinsics_.fy,
-        monocular_intrinsics_.cx,
-        monocular_intrinsics_.cy,
-        monocular_intrinsics_.image_width,
-        monocular_intrinsics_.image_height,
-        params_.monocular.horizontal_fov_deg);
-    }
-  }
-
   bool try_configure_intrinsics_from_service(bool log_result)
   {
 #ifdef HAVE_ASTRA_CAMERA_MSGS
@@ -272,53 +243,32 @@ private:
 #endif
   }
 
-  void refresh_monocular_intrinsics(bool log_result)
+  bool refresh_monocular_intrinsics(bool log_result)
   {
     if (try_configure_intrinsics_from_service(log_result)) {
-      return;
+      return true;
     }
 
-    if (log_result) {
 #ifndef HAVE_ASTRA_CAMERA_MSGS
-      RCLCPP_WARN(
+    if (log_result) {
+      RCLCPP_ERROR(
         get_logger(),
-        "[%s] astra_camera_msgs not available at build time; using fallback monocular intrinsics",
+        "[%s] astra_camera_msgs not available at build time; real camera intrinsics service is required",
         kRuntimeVersion);
+    }
+#else
+    if (log_result) {
+      RCLCPP_ERROR(
+        get_logger(),
+        "[%s] camera intrinsics are required but could not be loaded from service: %s",
+        kRuntimeVersion,
+        params_.monocular.camera_info_service.c_str());
+    }
 #endif
-    }
-    apply_fallback_intrinsics(preferred_fallback_image_size(), log_result);
-  }
-
-  void update_fallback_intrinsics_from_image(const Image & msg)
-  {
-    if (intrinsics_source_ != "fallback") {
-      return;
-    }
-
-    const cv::Size image_size(static_cast<int>(msg.width), static_cast<int>(msg.height));
-    if (image_size.width <= 0 || image_size.height <= 0) {
-      return;
-    }
-
-    if (
-      monocular_intrinsics_.image_width == image_size.width &&
-      monocular_intrinsics_.image_height == image_size.height &&
-      stats_.intrinsics_ready)
-    {
-      return;
-    }
-
-    apply_fallback_intrinsics(image_size, false);
-    RCLCPP_INFO_THROTTLE(
-      get_logger(),
-      *get_clock(),
-      5000,
-      "[%s] updated fallback intrinsics from image size=%dx%d fx=%.2f fy=%.2f",
-      kRuntimeVersion,
-      image_size.width,
-      image_size.height,
-      monocular_intrinsics_.fx,
-      monocular_intrinsics_.fy);
+    monocular_intrinsics_ = MonocularCameraIntrinsics{};
+    intrinsics_source_ = "missing";
+    sync_intrinsics_diagnostics();
+    return false;
   }
 
   void recreate_interfaces(bool preserve_activation)
@@ -394,7 +344,6 @@ private:
     if (!msg) {
       return;
     }
-    update_fallback_intrinsics_from_image(*msg);
     stats_.raw_color_count += 1;
     stats_.last_color_msg_stamp = rclcpp::Time(msg->header.stamp);
     frame_sync_.push_color(msg);
@@ -459,16 +408,27 @@ private:
     }
     const bool was_active =
       this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
+    const auto previous_params = params_;
+
+    params_ = candidate;
+    configure_modules_from_params();
+    configure_models();
+    if (!refresh_monocular_intrinsics(true)) {
+      params_ = previous_params;
+      configure_modules_from_params();
+      configure_models();
+      refresh_monocular_intrinsics(false);
+      rcl_interfaces::msg::SetParametersResult result;
+      result.successful = false;
+      result.reason = "camera intrinsics service unavailable";
+      return result;
+    }
+
     if (was_active && result_timer_) {
       result_timer_->cancel();
     }
     pipeline_.stop_detection_worker();
     pipeline_.clear_async_state();
-
-    params_ = candidate;
-    configure_modules_from_params();
-    configure_models();
-    refresh_monocular_intrinsics(true);
     recreate_interfaces(was_active);
 
     if (was_active) {
@@ -480,7 +440,7 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "[%s] parameters hot-reloaded: color=%s depth=%s person_pose=%s yolo=%s reid=%s sync_slop=%.3f depth_compare=(min=%.2f max=%.2f window=%d min_valid=%d) mono=(service=%s cam_h=%.2f pitch=%.1f x=%.2f y=%.2f min_down=%.1f hfov=%.1f min=%.2f max=%.2f) intrinsics=(src=%s ready=%d fx=%.2f fy=%.2f cx=%.2f cy=%.2f size=%dx%d) yolo_ort=(intra=%d inter=%d mode=%s) reid_ort=(intra=%d inter=%d mode=%s)",
+      "[%s] parameters hot-reloaded: color=%s depth=%s person_pose=%s yolo=%s reid=%s sync_slop=%.3f depth_compare=(min=%.2f max=%.2f window=%d min_valid=%d) camera=(service=%s x=%.2f y=%.2f) intrinsics=(src=%s ready=%d fx=%.2f fy=%.2f cx=%.2f cy=%.2f size=%dx%d) yolo_ort=(intra=%d inter=%d mode=%s) reid_ort=(intra=%d inter=%d mode=%s)",
       kRuntimeVersion,
       params_.color_topic.c_str(),
       params_.depth_topic.c_str(),
@@ -493,14 +453,8 @@ private:
       params_.depth_compare.sample_window_px,
       params_.depth_compare.min_valid_samples,
       params_.monocular.camera_info_service.c_str(),
-      params_.monocular.camera_height_m,
-      params_.monocular.camera_pitch_deg,
       params_.monocular.camera_x_offset_m,
       params_.monocular.camera_y_offset_m,
-      params_.monocular.min_downward_angle_deg,
-      params_.monocular.horizontal_fov_deg,
-      params_.monocular.min_range_m,
-      params_.monocular.max_range_m,
       intrinsics_source_.c_str(),
       stats_.intrinsics_ready ? 1 : 0,
       monocular_intrinsics_.fx,
@@ -527,7 +481,9 @@ private:
     ::smart_follower_perception::load_parameters(*this, params_);
     configure_modules_from_params();
     configure_models();
-    refresh_monocular_intrinsics(true);
+    if (!refresh_monocular_intrinsics(true)) {
+      return CallbackReturn::FAILURE;
+    }
     recreate_interfaces(false);
     pipeline_.clear_async_state();
 
@@ -569,7 +525,7 @@ private:
       params_.reid_ort.execution_mode_parallel ? "parallel" : "sequential");
     RCLCPP_INFO(
       get_logger(),
-      "[%s] input topic color=%s depth=%s person_pose=%s sync_slop=%.3f cache_size=%d depth_compare=(min=%.2f max=%.2f window=%d min_valid=%d) mono=(service=%s cam_h=%.2f pitch=%.1f x=%.2f y=%.2f min_down=%.1f hfov=%.1f min=%.2f max=%.2f) intrinsics=(src=%s ready=%d fx=%.2f fy=%.2f cx=%.2f cy=%.2f size=%dx%d)",
+      "[%s] input topic color=%s depth=%s person_pose=%s sync_slop=%.3f cache_size=%d depth_compare=(min=%.2f max=%.2f window=%d min_valid=%d) camera=(service=%s x=%.2f y=%.2f) intrinsics=(src=%s ready=%d fx=%.2f fy=%.2f cx=%.2f cy=%.2f size=%dx%d)",
       kRuntimeVersion,
       params_.color_topic.c_str(),
       params_.depth_topic.c_str(),
@@ -581,14 +537,8 @@ private:
       params_.depth_compare.sample_window_px,
       params_.depth_compare.min_valid_samples,
       params_.monocular.camera_info_service.c_str(),
-      params_.monocular.camera_height_m,
-      params_.monocular.camera_pitch_deg,
       params_.monocular.camera_x_offset_m,
       params_.monocular.camera_y_offset_m,
-      params_.monocular.min_downward_angle_deg,
-      params_.monocular.horizontal_fov_deg,
-      params_.monocular.min_range_m,
-      params_.monocular.max_range_m,
       intrinsics_source_.c_str(),
       stats_.intrinsics_ready ? 1 : 0,
       monocular_intrinsics_.fx,

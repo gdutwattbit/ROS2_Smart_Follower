@@ -4,6 +4,17 @@
 
 ## Unreleased
 
+### Changed
+- 路线收敛清理继续推进：删除 `smart_follower_only.launch.py`、旧模型导出/训练脚本、`pyproject.toml` 与相关安装入口
+- `try.md`、`docs/新人上手指南.md`、`当前推荐运行组合.md` 已按当前 **depth compare 主线** 重写，不再沿用旧纯 RGB / 单目说明
+- `scripts/install_dependencies.sh` 收口到当前运行主线，不再包含 uv / 训练 / 导出工具链逻辑
+- 运行时版本字符串同步到 `beta-0.2.0`
+
+### Verified
+- VM 端重新覆盖部署、重新编译完成
+- VM 端 mock color/depth + camera_info 注入烟测通过，确认 `/robot1/person_pose` 可发布
+- VM 端 `colcon test` 通过：`48 tests, 0 errors, 0 failures, 0 skipped`
+
 ## beta-0.2.0 - 2026-03-24
 
 ### Changed

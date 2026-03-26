@@ -53,14 +53,8 @@ void declare_parameters(rclcpp_lifecycle::LifecycleNode & node, const Perception
   node.declare_parameter("tracking.weights.appearance", defaults.weights.w_appearance);
 
   node.declare_parameter("monocular.camera_info_service", defaults.monocular.camera_info_service);
-  node.declare_parameter("monocular.horizontal_fov_deg", defaults.monocular.horizontal_fov_deg);
-  node.declare_parameter("monocular.min_range_m", defaults.monocular.min_range_m);
-  node.declare_parameter("monocular.max_range_m", defaults.monocular.max_range_m);
-  node.declare_parameter("monocular.camera_height_m", defaults.monocular.camera_height_m);
-  node.declare_parameter("monocular.camera_pitch_deg", defaults.monocular.camera_pitch_deg);
   node.declare_parameter("monocular.camera_x_offset_m", defaults.monocular.camera_x_offset_m);
   node.declare_parameter("monocular.camera_y_offset_m", defaults.monocular.camera_y_offset_m);
-  node.declare_parameter("monocular.min_downward_angle_deg", defaults.monocular.min_downward_angle_deg);
 
   node.declare_parameter("depth_compare.min_range_m", defaults.depth_compare.min_range_m);
   node.declare_parameter("depth_compare.max_range_m", defaults.depth_compare.max_range_m);
@@ -118,14 +112,8 @@ void load_parameters(rclcpp_lifecycle::LifecycleNode & node, PerceptionParams & 
   params.weights.w_appearance = node.get_parameter("tracking.weights.appearance").as_double();
 
   params.monocular.camera_info_service = node.get_parameter("monocular.camera_info_service").as_string();
-  params.monocular.horizontal_fov_deg = node.get_parameter("monocular.horizontal_fov_deg").as_double();
-  params.monocular.min_range_m = node.get_parameter("monocular.min_range_m").as_double();
-  params.monocular.max_range_m = node.get_parameter("monocular.max_range_m").as_double();
-  params.monocular.camera_height_m = std::max<double>(1e-3, node.get_parameter("monocular.camera_height_m").as_double());
-  params.monocular.camera_pitch_deg = node.get_parameter("monocular.camera_pitch_deg").as_double();
   params.monocular.camera_x_offset_m = node.get_parameter("monocular.camera_x_offset_m").as_double();
   params.monocular.camera_y_offset_m = node.get_parameter("monocular.camera_y_offset_m").as_double();
-  params.monocular.min_downward_angle_deg = std::max<double>(0.0, node.get_parameter("monocular.min_downward_angle_deg").as_double());
 
   params.depth_compare.min_range_m = node.get_parameter("depth_compare.min_range_m").as_double();
   params.depth_compare.max_range_m = node.get_parameter("depth_compare.max_range_m").as_double();
@@ -179,14 +167,8 @@ void apply_parameter_override(PerceptionParams & target, const rclcpp::Parameter
   else if (name == "tracking.weights.center") target.weights.w_center = param.as_double();
   else if (name == "tracking.weights.appearance") target.weights.w_appearance = param.as_double();
   else if (name == "monocular.camera_info_service") target.monocular.camera_info_service = param.as_string();
-  else if (name == "monocular.horizontal_fov_deg") target.monocular.horizontal_fov_deg = param.as_double();
-  else if (name == "monocular.min_range_m") target.monocular.min_range_m = param.as_double();
-  else if (name == "monocular.max_range_m") target.monocular.max_range_m = param.as_double();
-  else if (name == "monocular.camera_height_m") target.monocular.camera_height_m = std::max<double>(1e-3, param.as_double());
-  else if (name == "monocular.camera_pitch_deg") target.monocular.camera_pitch_deg = param.as_double();
   else if (name == "monocular.camera_x_offset_m") target.monocular.camera_x_offset_m = param.as_double();
   else if (name == "monocular.camera_y_offset_m") target.monocular.camera_y_offset_m = param.as_double();
-  else if (name == "monocular.min_downward_angle_deg") target.monocular.min_downward_angle_deg = std::max<double>(0.0, param.as_double());
   else if (name == "depth_compare.min_range_m") target.depth_compare.min_range_m = param.as_double();
   else if (name == "depth_compare.max_range_m") target.depth_compare.max_range_m = param.as_double();
   else if (name == "depth_compare.sample_window_px") target.depth_compare.sample_window_px = std::max<int>(1, static_cast<int>(param.as_int()));

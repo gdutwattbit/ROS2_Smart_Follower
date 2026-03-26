@@ -1,8 +1,6 @@
 #include <gtest/gtest.h>
 
-#include <cmath>
 #include <cstdint>
-#include <limits>
 
 #include <opencv2/core.hpp>
 
@@ -12,15 +10,12 @@ using smart_follower_perception::DepthPositionConfig;
 using smart_follower_perception::DepthSampleResult;
 using smart_follower_perception::MonocularCameraIntrinsics;
 using smart_follower_perception::MonocularPositionConfig;
-using smart_follower_perception::estimate_person_position_from_bbox;
 using smart_follower_perception::estimate_person_position_from_depth_bbox;
 using smart_follower_perception::is_valid_camera_intrinsics;
-using smart_follower_perception::make_fallback_camera_intrinsics;
 using smart_follower_perception::sample_depth_from_bbox;
 
 namespace
 {
-constexpr double kPi = 3.14159265358979323846;
 
 MonocularCameraIntrinsics make_intrinsics()
 {
@@ -38,11 +33,6 @@ MonocularCameraIntrinsics make_intrinsics()
 MonocularPositionConfig make_monocular_config()
 {
   MonocularPositionConfig config;
-  config.camera_height_m = 0.30F;
-  config.camera_pitch_deg = 18.0F;
-  config.min_downward_angle_deg = 2.0F;
-  config.min_range_m = 0.1F;
-  config.max_range_m = 6.0F;
   config.camera_x_offset_m = 0.175F;
   config.camera_y_offset_m = 0.01F;
   return config;
@@ -50,62 +40,17 @@ MonocularPositionConfig make_monocular_config()
 
 }  // namespace
 
-TEST(GeometryUtils, FallbackIntrinsicsUsesImageCenter)
+TEST(GeometryUtils, CameraIntrinsicsValidationRejectsInvalidValues)
 {
-  MonocularPositionConfig config;
-  config.horizontal_fov_deg = 69.0F;
+  auto intrinsics = make_intrinsics();
+  EXPECT_TRUE(is_valid_camera_intrinsics(intrinsics));
 
-  const auto intrinsics = make_fallback_camera_intrinsics(cv::Size(640, 480), config);
-  ASSERT_TRUE(is_valid_camera_intrinsics(intrinsics));
-  EXPECT_NEAR(intrinsics.cx, 319.5, 1e-6);
-  EXPECT_NEAR(intrinsics.cy, 239.5, 1e-6);
-  EXPECT_GT(intrinsics.fx, 0.0);
-  EXPECT_NEAR(intrinsics.fx, intrinsics.fy, 1e-6);
-}
+  intrinsics.fx = 0.0;
+  EXPECT_FALSE(is_valid_camera_intrinsics(intrinsics));
 
-TEST(GeometryUtils, ProjectsBottomCenterToFiniteForwardPosition)
-{
-  const auto intrinsics = make_intrinsics();
-  auto config = make_monocular_config();
-
-  const cv::Rect2f bbox(280.0F, 180.0F, 80.0F, 200.0F);
-  const auto point = estimate_person_position_from_bbox(bbox, intrinsics, config);
-  ASSERT_TRUE(point.has_value());
-  EXPECT_TRUE(std::isfinite(point->x));
-  EXPECT_TRUE(std::isfinite(point->y));
-  EXPECT_GT(point->x, 0.0);
-  EXPECT_NEAR(point->y, config.camera_y_offset_m, 1e-3);
-  EXPECT_DOUBLE_EQ(point->z, 0.0);
-}
-
-TEST(GeometryUtils, LeftAndRightBottomPointsProduceExpectedLateralSign)
-{
-  const auto intrinsics = make_intrinsics();
-  auto config = make_monocular_config();
-
-  const auto left = estimate_person_position_from_bbox(
-    cv::Rect2f(120.0F, 180.0F, 80.0F, 200.0F), intrinsics, config);
-  const auto right = estimate_person_position_from_bbox(
-    cv::Rect2f(440.0F, 180.0F, 80.0F, 200.0F), intrinsics, config);
-
-  ASSERT_TRUE(left.has_value());
-  ASSERT_TRUE(right.has_value());
-  EXPECT_GT(left->y, config.camera_y_offset_m);
-  EXPECT_LT(right->y, config.camera_y_offset_m);
-}
-
-TEST(GeometryUtils, RejectsProjectionNearHorizon)
-{
-  const auto intrinsics = make_intrinsics();
-  auto config = make_monocular_config();
-
-  const float bottom_v = static_cast<float>(
-    intrinsics.cy - intrinsics.fy * std::tan((18.0 - 1.0) * kPi / 180.0));
-  const auto point = estimate_person_position_from_bbox(
-    cv::Rect2f(280.0F, bottom_v - 120.0F, 80.0F, 120.0F),
-    intrinsics,
-    config);
-  EXPECT_FALSE(point.has_value());
+  intrinsics = make_intrinsics();
+  intrinsics.ready = false;
+  EXPECT_FALSE(is_valid_camera_intrinsics(intrinsics));
 }
 
 TEST(GeometryUtils, DepthSamplingUsesMedianAndIgnoresInvalidValues)

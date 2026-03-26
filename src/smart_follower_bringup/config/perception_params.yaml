@@ -49,14 +49,8 @@
 
     monocular:
       camera_info_service: /camera/get_camera_info
-      horizontal_fov_deg: 69.0
-      min_range_m: 0.60
-      max_range_m: 6.00
-      camera_height_m: 0.135
-      camera_pitch_deg: 0.0
       camera_x_offset_m: 0.175
       camera_y_offset_m: 0.01
-      min_downward_angle_deg: 2.0
 
     depth_compare:
       min_range_m: 0.20

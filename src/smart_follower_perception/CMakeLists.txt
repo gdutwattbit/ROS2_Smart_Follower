@@ -142,9 +142,6 @@ install(DIRECTORY include/
   DESTINATION include
 )
 
-install(DIRECTORY scripts/
-  DESTINATION share/${PROJECT_NAME}/scripts
-)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
