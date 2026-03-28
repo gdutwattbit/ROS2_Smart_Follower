@@ -25,7 +25,7 @@ def generate_launch_description():
     bringup_share = get_package_share_directory('smart_follower_bringup')
     workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(bringup_share))))
     model_dir = os.path.join(workspace_root, 'models')
-    yolo_model = os.path.join(model_dir, 'yolo26n_static_256x320_simplify_e2e.onnx')
+    yolo_model = os.path.join(model_dir, 'yolo26n_static_256x320_simplify_e2e_int8.onnx')
     reid_model = os.path.join(model_dir, 'osnet_x0_5_512.onnx')
     control_share = get_package_share_directory('smart_follower_control')
 

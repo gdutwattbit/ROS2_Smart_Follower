@@ -1,6 +1,7 @@
 #include "smart_follower_perception/geometry_utils.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cmath>
 #include <limits>
@@ -11,7 +12,7 @@ namespace smart_follower_perception
 
 namespace
 {
-constexpr float kDepthSampleYRatio = 0.70F;
+constexpr std::array<float, 4> kDepthSampleYRatios{0.78F, 0.68F, 0.58F, 0.48F};
 
 
 bool extract_depth_meters(const cv::Mat & depth, int x, int y, float & meters)
@@ -31,6 +32,37 @@ bool extract_depth_meters(const cv::Mat & depth, int x, int y, float & meters)
   }
 
   return false;
+}
+
+void append_window_samples(
+  const cv::Mat & depth,
+  int center_x,
+  int center_y,
+  const DepthPositionConfig & config,
+  std::vector<float> & valid)
+{
+  const int side = std::max(1, config.sample_window_px | 1);
+  const int radius = side / 2;
+
+  const int x0 = std::max(0, center_x - radius);
+  const int y0 = std::max(0, center_y - radius);
+  const int x1 = std::min(depth.cols - 1, center_x + radius);
+  const int y1 = std::min(depth.rows - 1, center_y + radius);
+  if (x0 > x1 || y0 > y1) {
+    return;
+  }
+
+  for (int y = y0; y <= y1; ++y) {
+    for (int x = x0; x <= x1; ++x) {
+      float meters = 0.0F;
+      if (!extract_depth_meters(depth, x, y, meters)) {
+        continue;
+      }
+      if (std::isfinite(meters) && meters >= config.min_range_m && meters <= config.max_range_m) {
+        valid.push_back(meters);
+      }
+    }
+  }
 }
 
 }  // namespace
@@ -59,30 +91,12 @@ DepthSampleResult sample_depth_from_bbox(
   }
 
   const int center_x = static_cast<int>(std::lround(bbox.x + bbox.width * 0.5F));
-  const int center_y = static_cast<int>(std::lround(bbox.y + bbox.height * kDepthSampleYRatio));
-  const int side = std::max(1, config.sample_window_px | 1);
-  const int radius = side / 2;
-
-  const int x0 = std::max(0, center_x - radius);
-  const int y0 = std::max(0, center_y - radius);
-  const int x1 = std::min(depth.cols - 1, center_x + radius);
-  const int y1 = std::min(depth.rows - 1, center_y + radius);
-  if (x0 > x1 || y0 > y1) {
-    return result;
-  }
-
   std::vector<float> valid;
-  valid.reserve(static_cast<std::size_t>((x1 - x0 + 1) * (y1 - y0 + 1)));
-  for (int y = y0; y <= y1; ++y) {
-    for (int x = x0; x <= x1; ++x) {
-      float meters = 0.0F;
-      if (!extract_depth_meters(depth, x, y, meters)) {
-        continue;
-      }
-      if (std::isfinite(meters) && meters >= config.min_range_m && meters <= config.max_range_m) {
-        valid.push_back(meters);
-      }
-    }
+  const int side = std::max(1, config.sample_window_px | 1);
+  valid.reserve(static_cast<std::size_t>(side * side * static_cast<int>(kDepthSampleYRatios.size())));
+  for (const float ratio : kDepthSampleYRatios) {
+    const int center_y = static_cast<int>(std::lround(bbox.y + bbox.height * ratio));
+    append_window_samples(depth, center_x, center_y, config, valid);
   }
 
   result.valid_samples = static_cast<int>(valid.size());

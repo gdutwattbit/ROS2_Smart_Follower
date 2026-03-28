@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdint>
+#include <limits>
 
 #include <opencv2/core.hpp>
 
@@ -58,13 +60,13 @@ TEST(GeometryUtils, DepthSamplingUsesMedianAndIgnoresInvalidValues)
   DepthPositionConfig config;
   config.min_range_m = 0.2F;
   config.max_range_m = 4.0F;
-  config.sample_window_px = 5;
-  config.min_valid_samples = 3;
+  config.sample_window_px = 9;
+  config.min_valid_samples = 5;
 
   cv::Mat depth(480, 640, CV_16UC1, cv::Scalar(0));
   const cv::Rect2f bbox(280.0F, 160.0F, 80.0F, 200.0F);
   const int center_x = 320;
-  const int center_y = 300;
+  const int center_y = 296;
   const std::uint16_t values[9] = {1500, 0, 1550, 1600, 1580, 40000, 1520, 1510, 1540};
   int idx = 0;
   for (int y = center_y - 1; y <= center_y + 1; ++y) {
@@ -86,14 +88,14 @@ TEST(GeometryUtils, DepthPositionRejectsInsufficientValidSamples)
   DepthPositionConfig depth_config;
   depth_config.min_range_m = 0.2F;
   depth_config.max_range_m = 4.0F;
-  depth_config.sample_window_px = 5;
+  depth_config.sample_window_px = 9;
   depth_config.min_valid_samples = 4;
 
   cv::Mat depth(480, 640, CV_16UC1, cv::Scalar(0));
   const cv::Rect2f bbox(280.0F, 160.0F, 80.0F, 200.0F);
-  depth.at<std::uint16_t>(300, 320) = 1500;
-  depth.at<std::uint16_t>(301, 320) = 1520;
-  depth.at<std::uint16_t>(299, 320) = 1510;
+  depth.at<std::uint16_t>(296, 320) = 1500;
+  depth.at<std::uint16_t>(297, 320) = 1520;
+  depth.at<std::uint16_t>(295, 320) = 1510;
 
   DepthSampleResult sample;
   const auto point = estimate_person_position_from_depth_bbox(
@@ -119,8 +121,8 @@ TEST(GeometryUtils, DepthPositionProducesExpectedLateralSign)
   DepthPositionConfig depth_config;
   depth_config.min_range_m = 0.2F;
   depth_config.max_range_m = 4.0F;
-  depth_config.sample_window_px = 5;
-  depth_config.min_valid_samples = 3;
+  depth_config.sample_window_px = 9;
+  depth_config.min_valid_samples = 5;
 
   cv::Mat depth(480, 640, CV_16UC1, cv::Scalar(1500));
   const auto left = estimate_person_position_from_depth_bbox(
@@ -134,4 +136,29 @@ TEST(GeometryUtils, DepthPositionProducesExpectedLateralSign)
   EXPECT_NEAR(right->x, 1.675, 1e-3);
   EXPECT_GT(left->y, monocular.camera_y_offset_m);
   EXPECT_LT(right->y, monocular.camera_y_offset_m);
+}
+TEST(GeometryUtils, DepthSamplingRecoversUsingLowerBodyWindowsWhenTopIsCutOff)
+{
+  DepthPositionConfig config;
+  config.min_range_m = 0.2F;
+  config.max_range_m = 4.0F;
+  config.sample_window_px = 9;
+  config.min_valid_samples = 5;
+
+  cv::Mat depth(480, 640, CV_16UC1, cv::Scalar(0));
+  const cv::Rect2f bbox(260.0F, 0.0F, 120.0F, 340.0F);
+  const int center_x = 320;
+  const int lower_center_y = static_cast<int>(std::lround(bbox.y + bbox.height * 0.78F));
+  const std::uint16_t values[9] = {1660, 0, 1640, 1650, 1670, 0, 1630, 1680, 1665};
+  int idx = 0;
+  for (int y = lower_center_y - 1; y <= lower_center_y + 1; ++y) {
+    for (int x = center_x - 1; x <= center_x + 1; ++x) {
+      depth.at<std::uint16_t>(y, x) = values[idx++];
+    }
+  }
+
+  const auto sample = sample_depth_from_bbox(depth, bbox, config);
+  EXPECT_TRUE(sample.valid);
+  EXPECT_EQ(sample.valid_samples, 7);
+  EXPECT_NEAR(sample.depth_m, 1.66F, 1e-3F);
 }

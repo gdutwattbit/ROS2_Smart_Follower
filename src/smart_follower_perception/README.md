@@ -1,4 +1,4 @@
-﻿# smart_follower_perception
+# smart_follower_perception
 
 `smart_follower_perception` 是当前项目的感知主包，负责这条固定主链路：
 
@@ -85,5 +85,5 @@
 - `camera_info_service` 现在属于必需路径，服务不可用会导致 configure 失败
 - depth compare 对深度图对齐质量、采样窗口和有效样本数比较敏感
 - 当前默认模型在 `models/` 目录：
-  - `yolo26n_static_256x320_simplify_e2e.onnx`
+  - `yolo26n_static_256x320_simplify_e2e_int8.onnx`
   - `osnet_x0_5_512.onnx`

@@ -1,19 +1,34 @@
-﻿# CHANGELOG
+# CHANGELOG
 
 本文档记录 `ROS2 Smart Follower` 的主要版本变更。
 
 ## Unreleased
 
+## beta-0.3.0 - 2026-03-29
+
 ### Changed
-- 路线收敛清理继续推进：删除 `smart_follower_only.launch.py`、旧模型导出/训练脚本、`pyproject.toml` 与相关安装入口
-- `try.md`、`docs/新人上手指南.md`、`当前推荐运行组合.md` 已按当前 **depth compare 主线** 重写，不再沿用旧纯 RGB / 单目说明
-- `scripts/install_dependencies.sh` 收口到当前运行主线，不再包含 uv / 训练 / 导出工具链逻辑
-- 运行时版本字符串同步到 `beta-0.2.0`
+- 默认运行模型切换为 `yolo26n_static_256x320_simplify_e2e_int8.onnx + osnet_x0_5_512.onnx`，并同步更新 launch / README / try 文档
+- perception 默认处理节奏从 `process_every_n_frames=3` 调整为 `2`，更贴近当前车端输入节奏
+- `depth_compare` 默认采样参数调整为 `sample_window_px=9`、`min_valid_samples=5`
+- 锁定目标的深度定位从单窗采样收口为 **lower-body 多窗口采样 + median**，取消旧兼容采样链路
+- follower 默认 `target_timeout` 从 `0.3s` 提升到 `1.2s`，短时无效深度或漏样本时更容易续上跟随
+- 根目录 README、依赖说明、调参说明、推荐运行组合与新人文档统一提升到 `beta-0.3.0`
+
+### Added
+- perception 增加锁定目标定位失败日志，区分 `depth_frame_unavailable`、`depth_window_no_valid_samples`、`bbox_near_image_edge`、`depth_projection_rejected`
+- follower 增加目标失效原因日志和 diagnostics 字段，便于定位 `target_timeout`、`locked_track_position_nan`、`locked_track_not_confirmed` 等状态
+- 新增 Textual / 轻量 live dashboard 调试工具，并补齐相关可选依赖说明
+- 新增 `调试命令表.md`，汇总编译、启动、话题排查和实车联调常用命令
+
+### Fixed
+- 跟踪模块补齐异常打印，并在 tracker 抛出异常时自动 reset，避免 perception 进程直接退出
+- perception 启动阶段对 `/camera/get_camera_info` 的等待改为多次重试，降低相机节点略晚启动时的 configure 失败概率
+- 小车容器内构建明确兼容 `/home/wheeltec/wheeltec_ros2/third_party/...` 依赖路径，避免因 `$HOME=/root` 导致 ONNX Runtime / libgpiod 漏检
 
 ### Verified
-- VM 端重新覆盖部署、重新编译完成
-- VM 端 mock color/depth + camera_info 注入烟测通过，确认 `/robot1/person_pose` 可发布
-- VM 端 `colcon test` 通过：`48 tests, 0 errors, 0 failures, 0 skipped`
+- 小车 `ros2` 容器内重新同步、重新编译 `smart_follower_perception` 通过
+- 小车容器内 `colcon test --packages-select smart_follower_perception` 通过：`42 tests, 0 errors, 0 failures, 0 skipped`
+- 实车联调确认：锁定后不走的问题明显缓解，当前版本已可稳定进入跟随，但目标过近/贴边时仍会按保护策略停转
 
 ## beta-0.2.0 - 2026-03-24
 

@@ -151,16 +151,8 @@ private:
   {
     RCLCPP_INFO(
       get_logger(),
-      "[%s] ultrasonic parameters hot-reloaded: rate=%.2f left=(%d,%d,%s) right=(%d,%d,%s) backend=%s",
-      kRuntimeVersion,
-      p_.runtime.rate,
-      p_.runtime.left.trig_pin,
-      p_.runtime.left.echo_pin,
-      p_.runtime.left.topic.c_str(),
-      p_.runtime.right.trig_pin,
-      p_.runtime.right.echo_pin,
-      p_.runtime.right.topic.c_str(),
-      runtime_.gpio_backend().c_str());
+      "[%s] ultrasonic parameters hot-reloaded.",
+      kRuntimeVersion);
   }
 
   rcl_interfaces::msg::SetParametersResult on_parameters_set(const std::vector<rclcpp::Parameter> & params)

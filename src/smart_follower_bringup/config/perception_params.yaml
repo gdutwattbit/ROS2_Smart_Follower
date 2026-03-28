@@ -7,7 +7,7 @@
     base_frame: base_footprint
 
     yolo:
-      model_path: models/yolo26n_static_256x320_simplify_e2e.onnx
+      model_path: models/yolo26n_static_256x320_simplify_e2e_int8.onnx
       input_w: 320
       input_h: 256
       person_class_id: 0
@@ -28,7 +28,7 @@
         inter_op_num_threads: 1
         execution_mode: sequential
 
-    process_every_n_frames: 3
+    process_every_n_frames: 2
     detect_every_n_frames: 1
     min_confirm_hits: 3
     max_miss_frames: 10
@@ -55,8 +55,8 @@
     depth_compare:
       min_range_m: 0.20
       max_range_m: 4.00
-      sample_window_px: 5
-      min_valid_samples: 3
+      sample_window_px: 9
+      min_valid_samples: 5
 
     lock:
       stable_frames: 5

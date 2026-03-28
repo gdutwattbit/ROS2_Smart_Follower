@@ -24,9 +24,17 @@ find_package(Eigen3 REQUIRED)
 find_package(astra_camera_msgs QUIET)
 
 set(SMART_FOLLOWER_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party")
+set(SMART_FOLLOWER_WHEELTEC_THIRD_PARTY_DIR "$ENV{HOME}/wheeltec_ros2/third_party")
+set(SMART_FOLLOWER_WHEELTEC_ABS_THIRD_PARTY_DIR "/home/wheeltec/wheeltec_ros2/third_party")
 
 set(ONNXRUNTIME_HINTS
   $ENV{ONNXRUNTIME_ROOT}
+  ${SMART_FOLLOWER_WHEELTEC_ABS_THIRD_PARTY_DIR}/onnxruntime-linux-aarch64-1.24.3
+  ${SMART_FOLLOWER_WHEELTEC_ABS_THIRD_PARTY_DIR}/onnxruntime-linux-aarch64
+  ${SMART_FOLLOWER_WHEELTEC_ABS_THIRD_PARTY_DIR}/onnxruntime
+  ${SMART_FOLLOWER_WHEELTEC_THIRD_PARTY_DIR}/onnxruntime-linux-aarch64-1.24.3
+  ${SMART_FOLLOWER_WHEELTEC_THIRD_PARTY_DIR}/onnxruntime-linux-aarch64
+  ${SMART_FOLLOWER_WHEELTEC_THIRD_PARTY_DIR}/onnxruntime
   ${SMART_FOLLOWER_THIRD_PARTY_DIR}/onnxruntime-linux-aarch64-1.24.3
   ${SMART_FOLLOWER_THIRD_PARTY_DIR}/onnxruntime-linux-aarch64
   ${SMART_FOLLOWER_THIRD_PARTY_DIR}/onnxruntime

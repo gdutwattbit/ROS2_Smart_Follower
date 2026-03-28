@@ -20,8 +20,8 @@ struct DepthPositionConfig
 {
   float min_range_m{0.2F};
   float max_range_m{4.0F};
-  int sample_window_px{5};
-  int min_valid_samples{3};
+  int sample_window_px{9};
+  int min_valid_samples{5};
 };
 
 struct MonocularCameraIntrinsics

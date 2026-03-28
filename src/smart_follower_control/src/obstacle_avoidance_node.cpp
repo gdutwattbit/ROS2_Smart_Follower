@@ -192,12 +192,8 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "[%s] avoidance parameters hot-reloaded: left=%s right=%s cmd=%s rate=%.2f",
-      kRuntimeVersion,
-      p_.left_topic.c_str(),
-      p_.right_topic.c_str(),
-      p_.cmd_vel_avoid_topic.c_str(),
-      p_.rate);
+      "[%s] obstacle avoidance parameters hot-reloaded.",
+      kRuntimeVersion);
 
     return make_ok_result();
   }

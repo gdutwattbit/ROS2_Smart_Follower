@@ -1,4 +1,5 @@
 #include <cmath>
+#include <limits>
 
 #include <gtest/gtest.h>
 
@@ -32,6 +33,22 @@ smart_follower_msgs::msg::PersonPoseArray make_unlocked_pose(const rclcpp::Time 
   msg.header.stamp = stamp;
   msg.lock_id = -1;
   msg.lock_state = smart_follower_msgs::msg::PersonPoseArray::IDLE;
+  return msg;
+}
+
+smart_follower_msgs::msg::PersonPoseArray make_locked_pose_with_nan(const rclcpp::Time & stamp)
+{
+  smart_follower_msgs::msg::PersonPoseArray msg;
+  msg.header.stamp = stamp;
+  msg.lock_id = 3;
+  msg.lock_state = smart_follower_msgs::msg::PersonPoseArray::LOCKED;
+
+  smart_follower_msgs::msg::TrackedPerson person;
+  person.track_id = 3;
+  person.track_state = smart_follower_msgs::msg::TrackedPerson::CONFIRMED;
+  person.position.x = std::numeric_limits<double>::quiet_NaN();
+  person.position.y = std::numeric_limits<double>::quiet_NaN();
+  msg.persons.push_back(person);
   return msg;
 }
 
@@ -162,4 +179,25 @@ TEST(FollowerRuntime, StopsPredictingWhenLockIsLost)
   EXPECT_DOUBLE_EQ(cmd.angular.z, 0.0);
   EXPECT_FALSE(snapshot.target_valid);
   EXPECT_FALSE(snapshot.predicted_target_valid);
+}
+
+TEST(FollowerRuntime, KeepsLastValidTargetAcrossShortNanGap)
+{
+  smart_follower_control::FollowerRuntime runtime;
+  auto config = make_test_config();
+  config.target_timeout = 0.4;
+  config.prediction_horizon_s = 0.25;
+  runtime.set_config(config);
+
+  const rclcpp::Time t0(10, 0, RCL_ROS_TIME);
+  runtime.on_pose(make_locked_pose(t0, 1.0, 0.0));
+  runtime.on_pose(make_locked_pose(t0 + rclcpp::Duration::from_seconds(0.1), 1.2, 0.0));
+  runtime.on_pose(make_locked_pose_with_nan(t0 + rclcpp::Duration::from_seconds(0.2)));
+
+  const auto cmd = runtime.compute_command(t0 + rclcpp::Duration::from_seconds(0.25));
+  const auto snapshot = runtime.snapshot(t0 + rclcpp::Duration::from_seconds(0.25));
+  EXPECT_GT(cmd.linear.x, 0.0);
+  EXPECT_TRUE(snapshot.target_valid);
+  EXPECT_TRUE(snapshot.predicted_target_valid);
+  EXPECT_NEAR(snapshot.target_vx, 2.0, 1e-6);
 }

@@ -19,10 +19,10 @@ struct PerceptionParams
   std::string person_pose_topic{"person_pose"};
   std::string follow_command_topic{"follow_command"};
   std::string base_frame{"base_footprint"};
-  std::string yolo_model_path{"models/yolo26n_static_256x320_simplify_e2e.onnx"};
+  std::string yolo_model_path{"models/yolo26n_static_256x320_simplify_e2e_int8.onnx"};
   std::string reid_model_path{"models/osnet_x0_5_512.onnx"};
 
-  int process_every_n_frames{3};
+  int process_every_n_frames{2};
   int detect_every_n_frames{1};
   int min_confirm_hits{3};
   int max_miss_frames{10};

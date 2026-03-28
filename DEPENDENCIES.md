@@ -1,6 +1,6 @@
-﻿# ros2_smart_follower 依赖清单
+# ros2_smart_follower 依赖清单
 
-本文档按 **beta-0.2.0 当前技术路线** 整理，只保留当前运行主线需要的依赖：
+本文档按 **beta-0.3.0 当前技术路线** 整理，只保留当前运行主线需要的依赖：
 - Astra 彩色 + 深度输入
 - YOLO + ReID + Tracker + Lock Manager
 - depth compare 定位
@@ -82,6 +82,22 @@
 若缺失：
 - `ultrasonic_range_node` 仍可编译
 - 但会进入 dry mode
+
+### 3.3 Textual 调试面板依赖（可选）
+
+若需要运行集成仪表盘：
+
+- `textual`
+
+安装方式：
+
+```bash
+python3 -m pip install textual
+```
+
+若缺失：
+- `tools/live_dashboard_textual.py` 无法运行
+- 但仍可使用轻量版 `tools/live_dashboard.py`
 
 ---
 

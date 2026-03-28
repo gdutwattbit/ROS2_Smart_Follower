@@ -16,6 +16,13 @@ void FollowerRuntime::set_config(const FollowerRuntimeConfig & config)
 void FollowerRuntime::clear()
 {
   last_target_ = TargetState();
+  last_pose_lock_id_ = -1;
+  last_pose_lock_state_ = 0;
+  last_pose_locked_track_found_ = false;
+  last_pose_locked_track_confirmed_ = false;
+  last_pose_locked_track_finite_ = false;
+  last_invalid_reason_.clear();
+  invalid_target_event_count_ = 0;
   reset_output();
 }
 
@@ -26,27 +33,54 @@ void FollowerRuntime::reset_output()
   last_cmd_ = geometry_msgs::msg::Twist();
 }
 
+namespace
+{
+void note_invalid_target(std::string & reason_slot, std::size_t & counter, const char * reason)
+{
+  reason_slot = reason;
+  ++counter;
+}
+}
+
 void FollowerRuntime::on_pose(const smart_follower_msgs::msg::PersonPoseArray & msg)
 {
+  last_pose_lock_id_ = msg.lock_id;
+  last_pose_lock_state_ = static_cast<int>(msg.lock_state);
+  last_pose_locked_track_found_ = false;
+  last_pose_locked_track_confirmed_ = false;
+  last_pose_locked_track_finite_ = false;
+
   if (msg.lock_id < 0) {
     last_target_.valid = false;
     last_target_.vx = 0.0;
     last_target_.vy = 0.0;
+    note_invalid_target(last_invalid_reason_, invalid_target_event_count_, "lock_lost");
     return;
   }
 
   bool updated = false;
+  bool matched_locked_track = false;
+  bool locked_track_confirmed = false;
+  bool locked_track_finite = false;
   for (const auto & person : msg.persons) {
     if (person.track_id != msg.lock_id) {
       continue;
     }
+
+    matched_locked_track = true;
+    last_pose_locked_track_found_ = true;
     if (person.track_state != smart_follower_msgs::msg::TrackedPerson::CONFIRMED) {
-      continue;
-    }
-    if (!std::isfinite(person.position.x) || !std::isfinite(person.position.y)) {
-      continue;
+      break;
     }
 
+    locked_track_confirmed = true;
+    last_pose_locked_track_confirmed_ = true;
+    if (!std::isfinite(person.position.x) || !std::isfinite(person.position.y)) {
+      break;
+    }
+
+    locked_track_finite = true;
+    last_pose_locked_track_finite_ = true;
     TargetState next_target;
     next_target.x = person.position.x;
     next_target.y = person.position.y;
@@ -66,14 +100,28 @@ void FollowerRuntime::on_pose(const smart_follower_msgs::msg::PersonPoseArray & 
 
     clamp_target_speed(next_target, config_.max_target_speed_mps);
     last_target_ = next_target;
+    last_invalid_reason_.clear();
     updated = true;
     break;
   }
 
   if (!updated) {
-    last_target_.valid = false;
-    last_target_.vx = 0.0;
-    last_target_.vy = 0.0;
+    if (!matched_locked_track) {
+      note_invalid_target(last_invalid_reason_, invalid_target_event_count_, "locked_track_missing");
+    } else if (!locked_track_confirmed) {
+      note_invalid_target(last_invalid_reason_, invalid_target_event_count_, "locked_track_not_confirmed");
+    } else if (!locked_track_finite) {
+      note_invalid_target(last_invalid_reason_, invalid_target_event_count_, "locked_track_position_nan");
+    } else {
+      note_invalid_target(last_invalid_reason_, invalid_target_event_count_, "locked_track_not_updated");
+    }
+
+    if (last_target_.valid) {
+      clamp_target_speed(last_target_, config_.max_target_speed_mps);
+    } else {
+      last_target_.vx = 0.0;
+      last_target_.vy = 0.0;
+    }
   }
 }
 
@@ -120,6 +168,13 @@ FollowerRuntimeSnapshot FollowerRuntime::snapshot(const rclcpp::Time & now_time)
   out.target_vx = last_target_.vx;
   out.target_vy = last_target_.vy;
   out.target_speed_mps = std::hypot(last_target_.vx, last_target_.vy);
+  out.last_pose_lock_id = last_pose_lock_id_;
+  out.last_pose_lock_state = last_pose_lock_state_;
+  out.locked_track_found = last_pose_locked_track_found_;
+  out.locked_track_confirmed = last_pose_locked_track_confirmed_;
+  out.locked_track_finite = last_pose_locked_track_finite_;
+  out.invalid_event_count = invalid_target_event_count_;
+  out.target_invalid_reason = last_invalid_reason_;
 
   if (!out.target_seen) {
     return out;
@@ -129,6 +184,9 @@ FollowerRuntimeSnapshot FollowerRuntime::snapshot(const rclcpp::Time & now_time)
   out.target_valid = last_target_.valid && out.target_age_s <= config_.target_timeout;
   out.prediction_age_s = std::min(out.target_age_s, std::max(0.0, config_.prediction_horizon_s));
   out.predicted_target_valid = out.target_valid;
+  if (out.target_valid) {
+    out.target_invalid_reason.clear();
+  }
   return out;
 }
 
@@ -147,6 +205,7 @@ std::optional<FollowerRuntime::TargetState> FollowerRuntime::predict_target(cons
   const double age = (now_time - last_target_.stamp).seconds();
   if (age < 0.0 || age > config_.target_timeout) {
     last_target_.valid = false;
+    note_invalid_target(last_invalid_reason_, invalid_target_event_count_, "target_timeout");
     return std::nullopt;
   }
 

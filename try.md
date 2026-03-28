@@ -1,6 +1,6 @@
-﻿# Smart Follower 调参说明（try.md）
+# Smart Follower 调参说明（try.md）
 
-本文只面向 **beta-0.2.0 当前固定技术路线**：
+本文只面向 **beta-0.3.0 当前固定技术路线**：
 - Astra `color + depth`
 - `/camera/get_camera_info` 真实内参
 - YOLO + ReID + Tracker + Lock Manager
@@ -23,7 +23,7 @@
 ## 1. 当前默认运行组合
 
 ### 1.1 模型
-- YOLO：`models/yolo26n_static_256x320_simplify_e2e.onnx`
+- YOLO：`models/yolo26n_static_256x320_simplify_e2e_int8.onnx`
 - ReID：`models/osnet_x0_5_512.onnx`
 
 ### 1.2 输入与节奏
@@ -31,7 +31,7 @@
 - depth：`/camera/depth/image_raw`
 - camera info service：`/camera/get_camera_info`
 - 相机典型输入：`640x480 @ 30fps`
-- 感知处理：`process_every_n_frames=3`，约 `10Hz`
+- 感知处理：`process_every_n_frames=2`，当前更适合先逼近输入上限
 - follower 控制：`20Hz`
 - 超声波：`10Hz`
 - 避障 / 仲裁：`20Hz`
@@ -115,7 +115,7 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 
 | 参数 | 默认值 | 作用 | 调参建议 |
 |---|---:|---|---|
-| `yolo.model_path` | `models/yolo26n_static_256x320_simplify_e2e.onnx` | YOLO ONNX 路径 | 通常由 launch 覆盖 |
+| `yolo.model_path` | `models/yolo26n_static_256x320_simplify_e2e_int8.onnx` | YOLO ONNX 路径 | 通常由 launch 覆盖 |
 | `yolo.input_w` | `320` | YOLO 输入宽 | 必须与模型匹配 |
 | `yolo.input_h` | `256` | YOLO 输入高 | 必须与模型匹配 |
 | `yolo.person_class_id` | `0` | person 类别 id | COCO 一般就是 0 |
@@ -141,7 +141,7 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 
 | 参数 | 默认值 | 作用 | 调参建议 |
 |---|---:|---|---|
-| `process_every_n_frames` | `3` | 每 N 帧处理 1 帧 | 30fps 相机下约等于 10Hz |
+| `process_every_n_frames` | `2` | 每 N 帧处理 1 帧 | 当前小车彩色输入约 13Hz 时，更容易把 `person_pose` 拉回到约 6~7Hz 区间 |
 | `detect_every_n_frames` | `1` | 每处理 N 帧做 1 次检测 | 当前保持每次处理都检测 |
 | `min_confirm_hits` | `3` | 轨迹确认最少命中数 | 升大更稳但起锁更慢 |
 | `max_miss_frames` | `10` | 轨迹最大丢失帧数 | 升大更抗漏检 |

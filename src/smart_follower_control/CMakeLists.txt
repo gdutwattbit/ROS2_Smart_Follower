@@ -20,8 +20,14 @@ find_package(diagnostic_msgs REQUIRED)
 find_package(smart_follower_msgs REQUIRED)
 
 set(SMART_FOLLOWER_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party")
+set(SMART_FOLLOWER_WHEELTEC_THIRD_PARTY_DIR "$ENV{HOME}/wheeltec_ros2/third_party")
+set(SMART_FOLLOWER_WHEELTEC_ABS_THIRD_PARTY_DIR "/home/wheeltec/wheeltec_ros2/third_party")
 set(LIBGPIOD_HINTS
   $ENV{LIBGPIOD_ROOT}
+  ${SMART_FOLLOWER_WHEELTEC_ABS_THIRD_PARTY_DIR}/libgpiod
+  ${SMART_FOLLOWER_WHEELTEC_ABS_THIRD_PARTY_DIR}/libgpiod/install
+  ${SMART_FOLLOWER_WHEELTEC_THIRD_PARTY_DIR}/libgpiod
+  ${SMART_FOLLOWER_WHEELTEC_THIRD_PARTY_DIR}/libgpiod/install
   ${SMART_FOLLOWER_THIRD_PARTY_DIR}/libgpiod
   ${SMART_FOLLOWER_THIRD_PARTY_DIR}/libgpiod/install
   /usr

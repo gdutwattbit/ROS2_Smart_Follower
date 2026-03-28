@@ -3,6 +3,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <diagnostic_updater/diagnostic_updater.hpp>
@@ -144,16 +145,10 @@ private:
     if (log_result) {
       RCLCPP_INFO(
         get_logger(),
-        "[%s] monocular intrinsics source=%s ready=%d fx=%.2f fy=%.2f cx=%.2f cy=%.2f size=%dx%d",
+        "[%s] camera intrinsics updated. source=%s ready=%d",
         kRuntimeVersion,
         intrinsics_source_.c_str(),
-        stats_.intrinsics_ready ? 1 : 0,
-        monocular_intrinsics_.fx,
-        monocular_intrinsics_.fy,
-        monocular_intrinsics_.cx,
-        monocular_intrinsics_.cy,
-        monocular_intrinsics_.image_width,
-        monocular_intrinsics_.image_height);
+        stats_.intrinsics_ready ? 1 : 0);
     }
   }
 
@@ -166,77 +161,107 @@ private:
       return false;
     }
 
+    constexpr auto kServiceWaitTimeout = std::chrono::milliseconds(1000);
+    constexpr auto kRequestTimeout = std::chrono::milliseconds(1500);
+    constexpr auto kRetryDelay = std::chrono::milliseconds(350);
+    constexpr int kMaxAttempts = 6;
+
     const auto suffix = std::to_string(
       std::chrono::steady_clock::now().time_since_epoch().count());
     auto helper = std::make_shared<rclcpp::Node>("perception_intrinsics_client_" + suffix);
     auto client = helper->create_client<GetCameraInfo>(params_.monocular.camera_info_service);
-    constexpr auto kServiceTimeout = std::chrono::milliseconds(800);
-
-    if (!client->wait_for_service(kServiceTimeout)) {
-      if (log_result) {
-        RCLCPP_WARN(
-          get_logger(),
-          "[%s] camera intrinsics service unavailable: %s",
-          kRuntimeVersion,
-          params_.monocular.camera_info_service.c_str());
-      }
-      return false;
-    }
-
-    auto request = std::make_shared<GetCameraInfo::Request>();
-    auto future = client->async_send_request(request);
-
     rclcpp::executors::SingleThreadedExecutor executor;
     executor.add_node(helper);
-    const auto status = executor.spin_until_future_complete(future, kServiceTimeout);
+
+    bool success = false;
+    for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+      if (!client->wait_for_service(kServiceWaitTimeout)) {
+        if (log_result) {
+          RCLCPP_WARN(
+            get_logger(),
+            "[%s] camera intrinsics service unavailable: %s (attempt %d/%d)",
+            kRuntimeVersion,
+            params_.monocular.camera_info_service.c_str(),
+            attempt,
+            kMaxAttempts);
+        }
+        if (attempt < kMaxAttempts) {
+          std::this_thread::sleep_for(kRetryDelay);
+        }
+        continue;
+      }
+
+      auto request = std::make_shared<GetCameraInfo::Request>();
+      auto future = client->async_send_request(request);
+      const auto status = executor.spin_until_future_complete(future, kRequestTimeout);
+
+      if (status != rclcpp::FutureReturnCode::SUCCESS) {
+        if (log_result) {
+          RCLCPP_WARN(
+            get_logger(),
+            "[%s] camera intrinsics service timed out: %s (attempt %d/%d)",
+            kRuntimeVersion,
+            params_.monocular.camera_info_service.c_str(),
+            attempt,
+            kMaxAttempts);
+        }
+        if (attempt < kMaxAttempts) {
+          std::this_thread::sleep_for(kRetryDelay);
+        }
+        continue;
+      }
+
+      const auto response = future.get();
+      if (!response || !response->success) {
+        if (log_result) {
+          RCLCPP_WARN(
+            get_logger(),
+            "[%s] camera intrinsics service failed: %s message=%s (attempt %d/%d)",
+            kRuntimeVersion,
+            params_.monocular.camera_info_service.c_str(),
+            response ? response->message.c_str() : "null response",
+            attempt,
+            kMaxAttempts);
+        }
+        if (attempt < kMaxAttempts) {
+          std::this_thread::sleep_for(kRetryDelay);
+        }
+        continue;
+      }
+
+      const auto intrinsics = camera_info_to_intrinsics(response->info);
+      if (!is_valid_camera_intrinsics(intrinsics)) {
+        if (log_result) {
+          RCLCPP_WARN(
+            get_logger(),
+            "[%s] camera intrinsics service returned invalid calibration: %s (attempt %d/%d)",
+            kRuntimeVersion,
+            params_.monocular.camera_info_service.c_str(),
+            attempt,
+            kMaxAttempts);
+        }
+        if (attempt < kMaxAttempts) {
+          std::this_thread::sleep_for(kRetryDelay);
+        }
+        continue;
+      }
+
+      set_intrinsics(intrinsics, "service", false);
+      if (log_result) {
+        RCLCPP_INFO(
+          get_logger(),
+          "[%s] camera intrinsics loaded from service on attempt %d/%d.",
+          kRuntimeVersion,
+          attempt,
+          kMaxAttempts);
+        set_intrinsics(monocular_intrinsics_, intrinsics_source_, true);
+      }
+      success = true;
+      break;
+    }
+
     executor.remove_node(helper);
-
-    if (status != rclcpp::FutureReturnCode::SUCCESS) {
-      if (log_result) {
-        RCLCPP_WARN(
-          get_logger(),
-          "[%s] camera intrinsics service timed out: %s",
-          kRuntimeVersion,
-          params_.monocular.camera_info_service.c_str());
-      }
-      return false;
-    }
-
-    const auto response = future.get();
-    if (!response || !response->success) {
-      if (log_result) {
-        RCLCPP_WARN(
-          get_logger(),
-          "[%s] camera intrinsics service failed: %s message=%s",
-          kRuntimeVersion,
-          params_.monocular.camera_info_service.c_str(),
-          response ? response->message.c_str() : "null response");
-      }
-      return false;
-    }
-
-    const auto intrinsics = camera_info_to_intrinsics(response->info);
-    if (!is_valid_camera_intrinsics(intrinsics)) {
-      if (log_result) {
-        RCLCPP_WARN(
-          get_logger(),
-          "[%s] camera intrinsics service returned invalid calibration: %s",
-          kRuntimeVersion,
-          params_.monocular.camera_info_service.c_str());
-      }
-      return false;
-    }
-
-    set_intrinsics(intrinsics, "service", false);
-    if (log_result) {
-      RCLCPP_INFO(
-        get_logger(),
-        "[%s] camera intrinsics loaded from service: %s",
-        kRuntimeVersion,
-        params_.monocular.camera_info_service.c_str());
-      set_intrinsics(monocular_intrinsics_, intrinsics_source_, true);
-    }
-    return true;
+    return success;
 #else
     (void)log_result;
     return false;
@@ -310,7 +335,7 @@ private:
 
   void log_raw_input_status()
   {
-    RCLCPP_INFO_THROTTLE(
+    RCLCPP_DEBUG_THROTTLE(
       get_logger(),
       *get_clock(),
       2000,
@@ -440,35 +465,8 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "[%s] parameters hot-reloaded: color=%s depth=%s person_pose=%s yolo=%s reid=%s sync_slop=%.3f depth_compare=(min=%.2f max=%.2f window=%d min_valid=%d) camera=(service=%s x=%.2f y=%.2f) intrinsics=(src=%s ready=%d fx=%.2f fy=%.2f cx=%.2f cy=%.2f size=%dx%d) yolo_ort=(intra=%d inter=%d mode=%s) reid_ort=(intra=%d inter=%d mode=%s)",
-      kRuntimeVersion,
-      params_.color_topic.c_str(),
-      params_.depth_topic.c_str(),
-      params_.person_pose_topic.c_str(),
-      params_.yolo_model_path.c_str(),
-      params_.reid_model_path.c_str(),
-      params_.sync_slop,
-      params_.depth_compare.min_range_m,
-      params_.depth_compare.max_range_m,
-      params_.depth_compare.sample_window_px,
-      params_.depth_compare.min_valid_samples,
-      params_.monocular.camera_info_service.c_str(),
-      params_.monocular.camera_x_offset_m,
-      params_.monocular.camera_y_offset_m,
-      intrinsics_source_.c_str(),
-      stats_.intrinsics_ready ? 1 : 0,
-      monocular_intrinsics_.fx,
-      monocular_intrinsics_.fy,
-      monocular_intrinsics_.cx,
-      monocular_intrinsics_.cy,
-      monocular_intrinsics_.image_width,
-      monocular_intrinsics_.image_height,
-      params_.yolo_ort.intra_op_num_threads,
-      params_.yolo_ort.inter_op_num_threads,
-      params_.yolo_ort.execution_mode_parallel ? "parallel" : "sequential",
-      params_.reid_ort.intra_op_num_threads,
-      params_.reid_ort.inter_op_num_threads,
-      params_.reid_ort.execution_mode_parallel ? "parallel" : "sequential");
+      "[%s] perception parameters hot-reloaded, runtime continuing.",
+      kRuntimeVersion);
 
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = true;
@@ -507,46 +505,8 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "[%s] Configured perception node. YOLO ready=%d ReID ready=%d yolo_input=%dx%d reid_input=%dx%d process_every_n_frames=%d detect_every_n_frames=%d yolo_ort=(intra=%d inter=%d mode=%s) reid_ort=(intra=%d inter=%d mode=%s)",
-      kRuntimeVersion,
-      yolo_.ready(),
-      reid_.ready(),
-      params_.yolo_input_w,
-      params_.yolo_input_h,
-      params_.reid_input_w,
-      params_.reid_input_h,
-      params_.process_every_n_frames,
-      params_.detect_every_n_frames,
-      params_.yolo_ort.intra_op_num_threads,
-      params_.yolo_ort.inter_op_num_threads,
-      params_.yolo_ort.execution_mode_parallel ? "parallel" : "sequential",
-      params_.reid_ort.intra_op_num_threads,
-      params_.reid_ort.inter_op_num_threads,
-      params_.reid_ort.execution_mode_parallel ? "parallel" : "sequential");
-    RCLCPP_INFO(
-      get_logger(),
-      "[%s] input topic color=%s depth=%s person_pose=%s sync_slop=%.3f cache_size=%d depth_compare=(min=%.2f max=%.2f window=%d min_valid=%d) camera=(service=%s x=%.2f y=%.2f) intrinsics=(src=%s ready=%d fx=%.2f fy=%.2f cx=%.2f cy=%.2f size=%dx%d)",
-      kRuntimeVersion,
-      params_.color_topic.c_str(),
-      params_.depth_topic.c_str(),
-      params_.person_pose_topic.c_str(),
-      params_.sync_slop,
-      params_.sync_cache_size,
-      params_.depth_compare.min_range_m,
-      params_.depth_compare.max_range_m,
-      params_.depth_compare.sample_window_px,
-      params_.depth_compare.min_valid_samples,
-      params_.monocular.camera_info_service.c_str(),
-      params_.monocular.camera_x_offset_m,
-      params_.monocular.camera_y_offset_m,
-      intrinsics_source_.c_str(),
-      stats_.intrinsics_ready ? 1 : 0,
-      monocular_intrinsics_.fx,
-      monocular_intrinsics_.fy,
-      monocular_intrinsics_.cx,
-      monocular_intrinsics_.cy,
-      monocular_intrinsics_.image_width,
-      monocular_intrinsics_.image_height);
+      "[%s] perception node configured and running.",
+      kRuntimeVersion);
     return CallbackReturn::SUCCESS;
   }
 
@@ -628,8 +588,37 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<smart_follower_perception::PerceptionNode>();
-  node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
-  node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE);
+
+  const auto configured_state = node->trigger_transition(
+    lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
+  if (configured_state.id() != lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE ||
+    node->get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE)
+  {
+    RCLCPP_ERROR(
+      node->get_logger(),
+      "[%s] perception node failed to configure. current_state=%s returned_state=%s",
+      smart_follower_perception::kRuntimeVersion,
+      node->get_current_state().label().c_str(),
+      configured_state.label().c_str());
+    rclcpp::shutdown();
+    return 1;
+  }
+
+  const auto activated_state = node->trigger_transition(
+    lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE);
+  if (activated_state.id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE ||
+    node->get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE)
+  {
+    RCLCPP_ERROR(
+      node->get_logger(),
+      "[%s] perception node failed to activate. current_state=%s returned_state=%s",
+      smart_follower_perception::kRuntimeVersion,
+      node->get_current_state().label().c_str(),
+      activated_state.label().c_str());
+    rclcpp::shutdown();
+    return 1;
+  }
+
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
   executor.spin();

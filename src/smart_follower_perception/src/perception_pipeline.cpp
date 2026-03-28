@@ -1,6 +1,8 @@
 #include "smart_follower_perception/perception_pipeline.hpp"
 
 #include <chrono>
+#include <cmath>
+#include <exception>
 #include <utility>
 
 #include <cv_bridge/cv_bridge.h>
@@ -83,7 +85,7 @@ bool PerceptionPipeline::enqueue_synchronized_frame(const SynchronizedFrame & sy
   const bool run_pipeline = (stats_.queued_color_count % params_.process_every_n_frames == 0);
   if (!run_pipeline) {
     stats_.skipped_synced_frame_count += 1;
-    RCLCPP_INFO_THROTTLE(
+    RCLCPP_DEBUG_THROTTLE(
       logger_,
       clock_,
       2000,
@@ -96,7 +98,7 @@ bool PerceptionPipeline::enqueue_synchronized_frame(const SynchronizedFrame & sy
 
   scheduled_frame_counter_ += 1;
   const bool run_detect = (scheduled_frame_counter_ % params_.detect_every_n_frames == 0);
-  RCLCPP_INFO_THROTTLE(
+  RCLCPP_DEBUG_THROTTLE(
     logger_,
     clock_,
     2000,
@@ -250,13 +252,65 @@ void PerceptionPipeline::process_detection_result(
   const std::size_t detection_count = result.detections.size();
 
   const auto tracking_begin = Clock::now();
-  auto track_result = tracker_.run_tracking(
-    std::move(result.detections),
-    result.image_size,
-    result.stamp,
-    result.run_detect);
+  const std::size_t active_track_count_before = tracker_.tracks().size();
+  Tracker::RunResult track_result;
+  bool tracking_ok = true;
+  try {
+    track_result = tracker_.run_tracking(
+      std::move(result.detections),
+      result.image_size,
+      result.stamp,
+      result.run_detect);
+  } catch (const cv::Exception & ex) {
+    tracking_ok = false;
+    tracker_.reset();
+    RCLCPP_ERROR(
+      logger_,
+      "[%s] tracker cv exception: %s | stamp_ns=%lld detections=%zu tracks_before=%zu run_detect=%d image=%dx%d lock=(id:%d state:%u). tracker reset and continuing with empty track set.",
+      kRuntimeVersion,
+      ex.what(),
+      static_cast<long long>(result.stamp.nanoseconds()),
+      detection_count,
+      active_track_count_before,
+      result.run_detect ? 1 : 0,
+      result.image_size.width,
+      result.image_size.height,
+      lock_manager_.lock_id(),
+      lock_manager_.lock_state());
+  } catch (const std::exception & ex) {
+    tracking_ok = false;
+    tracker_.reset();
+    RCLCPP_ERROR(
+      logger_,
+      "[%s] tracker exception: %s | stamp_ns=%lld detections=%zu tracks_before=%zu run_detect=%d image=%dx%d lock=(id:%d state:%u). tracker reset and continuing with empty track set.",
+      kRuntimeVersion,
+      ex.what(),
+      static_cast<long long>(result.stamp.nanoseconds()),
+      detection_count,
+      active_track_count_before,
+      result.run_detect ? 1 : 0,
+      result.image_size.width,
+      result.image_size.height,
+      lock_manager_.lock_id(),
+      lock_manager_.lock_state());
+  } catch (...) {
+    tracking_ok = false;
+    tracker_.reset();
+    RCLCPP_ERROR(
+      logger_,
+      "[%s] tracker threw unknown exception | stamp_ns=%lld detections=%zu tracks_before=%zu run_detect=%d image=%dx%d lock=(id:%d state:%u). tracker reset and continuing with empty track set.",
+      kRuntimeVersion,
+      static_cast<long long>(result.stamp.nanoseconds()),
+      detection_count,
+      active_track_count_before,
+      result.run_detect ? 1 : 0,
+      result.image_size.width,
+      result.image_size.height,
+      lock_manager_.lock_id(),
+      lock_manager_.lock_state());
+  }
   const auto tracking_end = Clock::now();
-  if (track_result.recovered_track_id.has_value()) {
+  if (tracking_ok && track_result.recovered_track_id.has_value()) {
     lock_manager_.set_lock_id(*track_result.recovered_track_id);
   }
 
@@ -265,7 +319,18 @@ void PerceptionPipeline::process_detection_result(
   const auto lock_end = Clock::now();
 
   cv::Mat depth_image;
-  convert_depth_message(result.depth_frame, depth_image, logger_, clock_);
+  const bool depth_ready = convert_depth_message(result.depth_frame, depth_image, logger_, clock_);
+  if (!depth_ready) {
+    RCLCPP_WARN_THROTTLE(
+      logger_,
+      clock_,
+      1200,
+      "[%s] depth frame unavailable for pose build: lock_id=%d detections=%zu encoding=%s",
+      kRuntimeVersion,
+      lock_manager_.lock_id(),
+      detection_count,
+      result.depth_frame ? result.depth_frame->encoding.c_str() : "null");
+  }
 
   const auto message_begin = Clock::now();
   auto pose_build = build_person_pose_array(
@@ -290,7 +355,7 @@ void PerceptionPipeline::process_detection_result(
     publish_ms = elapsed_ms(publish_begin, publish_end);
     stats_.person_pose_publish_count += 1;
     stats_.last_person_pose_publish_stamp = now_fn();
-    RCLCPP_INFO_THROTTLE(
+    RCLCPP_DEBUG_THROTTLE(
       logger_,
       clock_,
       2000,
@@ -334,7 +399,78 @@ void PerceptionPipeline::process_detection_result(
     detection_count,
     out.persons.size());
 
-  RCLCPP_INFO_THROTTLE(
+  if (pose_build.stats.position_failure_count > 0) {
+    const smart_follower_msgs::msg::TrackedPerson * locked_person = nullptr;
+    bool locked_person_invalid = false;
+    for (const auto & person : out.persons) {
+      if (person.track_id != out.lock_id) {
+        continue;
+      }
+      locked_person = &person;
+      locked_person_invalid = !std::isfinite(person.position.x) || !std::isfinite(person.position.y);
+      break;
+    }
+
+    if (locked_person != nullptr && locked_person_invalid) {
+      const bool touch_top = locked_person->bbox.y_offset <= 1U;
+      const bool touch_left = locked_person->bbox.x_offset <= 1U;
+      const bool touch_right = (locked_person->bbox.x_offset + locked_person->bbox.width + 1U) >= static_cast<unsigned int>(result.image_size.width);
+      const bool touch_bottom = (locked_person->bbox.y_offset + locked_person->bbox.height + 1U) >= static_cast<unsigned int>(result.image_size.height);
+      const char * reason = "unknown";
+      if (!depth_ready) {
+        reason = "depth_frame_unavailable";
+      } else if (pose_build.stats.depth_samples_valid == 0) {
+        reason = "depth_window_no_valid_samples";
+      } else if (touch_top || touch_left || touch_right || touch_bottom) {
+        reason = "bbox_near_image_edge";
+      } else {
+        reason = "depth_projection_rejected";
+      }
+      RCLCPP_WARN_THROTTLE(
+        logger_,
+        clock_,
+        600,
+        "[%s] locked target position invalid: reason=%s lock_id=%d state=%u bbox=(%u,%u,%u,%u) touch=(t:%d l:%d r:%d b:%d) img=(%d,%d) depth_ready=%d depth_samples_valid=%zu last_valid_depth_m=%.3f failures=%zu detections=%zu tracks=%zu",
+        kRuntimeVersion,
+        reason,
+        out.lock_id,
+        out.lock_state,
+        locked_person->bbox.x_offset,
+        locked_person->bbox.y_offset,
+        locked_person->bbox.width,
+        locked_person->bbox.height,
+        touch_top ? 1 : 0,
+        touch_left ? 1 : 0,
+        touch_right ? 1 : 0,
+        touch_bottom ? 1 : 0,
+        result.image_size.width,
+        result.image_size.height,
+        depth_ready ? 1 : 0,
+        pose_build.stats.depth_samples_valid,
+        stats_.last_valid_depth_m,
+        pose_build.stats.position_failure_count,
+        detection_count,
+        out.persons.size());
+    } else {
+      const char * reason = (out.lock_id < 0) ? "no_lock" : ((locked_person == nullptr) ? "locked_track_missing_from_output" : "non_locked_track_invalid");
+      RCLCPP_WARN_THROTTLE(
+        logger_,
+        clock_,
+        1000,
+        "[%s] position build produced invalid targets: reason=%s failures=%zu lock_id=%d lock_state=%u depth_samples_valid=%zu last_valid_depth_m=%.3f detections=%zu tracks=%zu",
+        kRuntimeVersion,
+        reason,
+        pose_build.stats.position_failure_count,
+        out.lock_id,
+        out.lock_state,
+        pose_build.stats.depth_samples_valid,
+        stats_.last_valid_depth_m,
+        detection_count,
+        out.persons.size());
+    }
+  }
+
+  RCLCPP_DEBUG_THROTTLE(
     logger_,
     clock_,
     5000,

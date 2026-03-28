@@ -233,13 +233,8 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "[%s] arbiter parameters hot-reloaded: pose=%s follow=%s avoid=%s cmd=%s rate=%.2f",
-      kRuntimeVersion,
-      p_.person_pose_topic.c_str(),
-      p_.cmd_vel_follow_topic.c_str(),
-      p_.cmd_vel_avoid_topic.c_str(),
-      p_.cmd_vel_topic.c_str(),
-      p_.publish_rate);
+      "[%s] arbiter parameters hot-reloaded.",
+      kRuntimeVersion);
 
     return make_ok_result();
   }

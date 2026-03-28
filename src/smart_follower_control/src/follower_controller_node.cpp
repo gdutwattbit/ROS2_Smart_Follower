@@ -31,7 +31,7 @@ public:
     declare_parameter("control_rate", 20.0);
     declare_parameter("target_distance", 1.0);
     declare_parameter("theta_deadzone", 0.03);
-    declare_parameter("target_timeout", 0.3);
+    declare_parameter("target_timeout", 0.4);
     declare_parameter("prediction_horizon_s", 0.25);
     declare_parameter("velocity_ema_alpha", 0.70);
     declare_parameter("max_target_speed_mps", 1.50);
@@ -201,15 +201,8 @@ private:
 
     RCLCPP_INFO(
       get_logger(),
-      "[%s] controller parameters hot-reloaded: pose=%s cmd=%s rate=%.2f timeout=%.2f horizon=%.2f alpha=%.2f vmax=%.2f",
-      kRuntimeVersion,
-      p_.person_pose_topic.c_str(),
-      p_.cmd_vel_follow_topic.c_str(),
-      p_.runtime.control_rate,
-      p_.runtime.target_timeout,
-      p_.runtime.prediction_horizon_s,
-      p_.runtime.velocity_ema_alpha,
-      p_.runtime.max_target_speed_mps);
+      "[%s] follower controller parameters hot-reloaded.",
+      kRuntimeVersion);
 
     return make_ok_result();
   }
@@ -220,7 +213,34 @@ private:
       return;
     }
 
-    publish_if_activated(cmd_pub_, runtime_.compute_command(now()));
+    const auto now_time = now();
+    publish_if_activated(cmd_pub_, runtime_.compute_command(now_time));
+
+    const auto snapshot = runtime_.snapshot(now_time);
+    if (snapshot.target_seen && !snapshot.target_valid) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        800,
+        "[%s] follower target invalid: reason=%s age=%.3f timeout=%.3f pred_age=%.3f last_cmd=(%.3f,%.3f) target_v=(%.3f,%.3f) speed=%.3f invalid_events=%zu pose_lock=(id:%d state:%d found:%d confirmed:%d finite:%d)",
+        kRuntimeVersion,
+        snapshot.target_invalid_reason.empty() ? "unknown" : snapshot.target_invalid_reason.c_str(),
+        snapshot.target_age_s,
+        p_.runtime.target_timeout,
+        snapshot.prediction_age_s,
+        snapshot.last_cmd_v,
+        snapshot.last_cmd_w,
+        snapshot.target_vx,
+        snapshot.target_vy,
+        snapshot.target_speed_mps,
+        snapshot.invalid_event_count,
+        snapshot.last_pose_lock_id,
+        snapshot.last_pose_lock_state,
+        snapshot.locked_track_found ? 1 : 0,
+        snapshot.locked_track_confirmed ? 1 : 0,
+        snapshot.locked_track_finite ? 1 : 0);
+    }
+
     diagnostics_.force_update();
   }
 
@@ -243,6 +263,13 @@ private:
     stat.add("target_speed_mps", snapshot.target_speed_mps);
     stat.add("prediction_age_s", snapshot.prediction_age_s);
     stat.add("predicted_target_valid", snapshot.predicted_target_valid);
+    stat.add("last_pose_lock_id", snapshot.last_pose_lock_id);
+    stat.add("last_pose_lock_state", snapshot.last_pose_lock_state);
+    stat.add("locked_track_found", snapshot.locked_track_found);
+    stat.add("locked_track_confirmed", snapshot.locked_track_confirmed);
+    stat.add("locked_track_finite", snapshot.locked_track_finite);
+    stat.add("target_invalid_reason", snapshot.target_invalid_reason);
+    stat.add("invalid_event_count", static_cast<int>(snapshot.invalid_event_count));
 
     int level = diagnostic_msgs::msg::DiagnosticStatus::OK;
     std::string message = "Follower control active";
@@ -254,7 +281,7 @@ private:
       message = "Target input stale";
     } else if (!snapshot.target_valid || snapshot.target_age_s > p_.runtime.target_timeout) {
       level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
-      message = "Target input timed out";
+      message = snapshot.target_invalid_reason.empty() ? "Target input timed out" : (std::string("Target invalid: ") + snapshot.target_invalid_reason);
     }
     stat.summary(level, message);
   }
