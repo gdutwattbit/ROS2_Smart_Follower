@@ -25,10 +25,6 @@
 - perception 启动阶段对 `/camera/get_camera_info` 的等待改为多次重试，降低相机节点略晚启动时的 configure 失败概率
 - 小车容器内构建明确兼容 `/home/wheeltec/wheeltec_ros2/third_party/...` 依赖路径，避免因 `$HOME=/root` 导致 ONNX Runtime / libgpiod 漏检
 
-### Verified
-- 小车 `ros2` 容器内重新同步、重新编译 `smart_follower_perception` 通过
-- 小车容器内 `colcon test --packages-select smart_follower_perception` 通过：`42 tests, 0 errors, 0 failures, 0 skipped`
-- 实车联调确认：锁定后不走的问题明显缓解，当前版本已可稳定进入跟随，但目标过近/贴边时仍会按保护策略停转
 
 ## beta-0.2.0 - 2026-03-24
 
