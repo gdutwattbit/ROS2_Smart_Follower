@@ -4,6 +4,20 @@
 
 ## Unreleased
 
+## beta-0.3.1 - 2026-03-29
+
+### Changed
+- 在 `beta-0.3.0` 稳定可跑的基础上，继续做技术路线收口：移除旧文档、旧模型与当前主线无关的历史说明，仓库只保留 Astra color+depth + YOLO/ReID/Tracker/Lock Manager 的固定路线
+- perception 构建改为强制依赖 `astra_camera_msgs`，删除缺包时的旧兼容逻辑，运行链路统一以真实相机内参服务为准
+- 历史 `monocular` 命名统一替换为 `camera` 命名；包括参数键、类型名、函数名和内部成员，减少当前 RGB-D 主线下的理解成本
+- README、依赖说明、调参说明和新人文档同步提升到 `beta-0.3.1`，补齐本轮路线收敛与命名收口说明
+
+### Removed
+- 删除仓库根目录中与当前固定主线无关的旧说明文件：`test.md`、`install.md`、`当前推荐运行组合.md`、`技术路线收敛代码审查报告_beta-0.2.0.md`
+- 删除已不再使用的旧 YOLO 模型 `models/yolo26n_static_256x320_simplify_e2e.onnx`
+
+### Verified
+- VM 工作区已完成同步并重新编译通过：`smart_follower_msgs`、`smart_follower_perception`、`smart_follower_control`、`smart_follower_bringup` 4 个包全部构建成功
 ## beta-0.3.0 - 2026-03-29
 
 ### Changed

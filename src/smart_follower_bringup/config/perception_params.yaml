@@ -47,10 +47,10 @@
         center: 0.2
         appearance: 0.4
 
-    monocular:
-      camera_info_service: /camera/get_camera_info
-      camera_x_offset_m: 0.175
-      camera_y_offset_m: 0.01
+    camera:
+      info_service: /camera/get_camera_info
+      x_offset_m: 0.175
+      y_offset_m: 0.01
 
     depth_compare:
       min_range_m: 0.20

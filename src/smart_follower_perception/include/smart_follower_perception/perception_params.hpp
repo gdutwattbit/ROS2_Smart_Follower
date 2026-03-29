@@ -50,7 +50,7 @@ struct PerceptionParams
   OrtRuntimeConfig yolo_ort{1, 1, false};
   OrtRuntimeConfig reid_ort{1, 1, false};
   CostWeights weights;
-  MonocularPositionConfig monocular;
+  CameraConfig camera;
   DepthPositionConfig depth_compare;
 };
 

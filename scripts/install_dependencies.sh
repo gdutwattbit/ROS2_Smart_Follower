@@ -159,8 +159,8 @@ rosdep install \
 
 mkdir -p models
 
-if [[ ! -f models/yolo26n_static_256x320_simplify_e2e.onnx ]]; then
-  warn "未找到 models/yolo26n_static_256x320_simplify_e2e.onnx"
+if [[ ! -f models/yolo26n_static_256x320_simplify_e2e_int8.onnx ]]; then
+  warn "未找到 models/yolo26n_static_256x320_simplify_e2e_int8.onnx"
 fi
 
 if [[ ! -f models/osnet_x0_5_512.onnx ]]; then

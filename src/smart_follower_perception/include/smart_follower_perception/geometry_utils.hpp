@@ -9,11 +9,11 @@
 namespace smart_follower_perception
 {
 
-struct MonocularPositionConfig
+struct CameraConfig
 {
-  std::string camera_info_service{"/camera/get_camera_info"};
-  float camera_x_offset_m{0.0F};
-  float camera_y_offset_m{0.0F};
+  std::string info_service{"/camera/get_camera_info"};
+  float x_offset_m{0.0F};
+  float y_offset_m{0.0F};
 };
 
 struct DepthPositionConfig
@@ -24,7 +24,7 @@ struct DepthPositionConfig
   int min_valid_samples{5};
 };
 
-struct MonocularCameraIntrinsics
+struct CameraIntrinsics
 {
   double fx{0.0};
   double fy{0.0};
@@ -42,7 +42,7 @@ struct DepthSampleResult
   bool valid{false};
 };
 
-bool is_valid_camera_intrinsics(const MonocularCameraIntrinsics & intrinsics);
+bool is_valid_camera_intrinsics(const CameraIntrinsics & intrinsics);
 
 
 DepthSampleResult sample_depth_from_bbox(
@@ -53,8 +53,8 @@ DepthSampleResult sample_depth_from_bbox(
 std::optional<geometry_msgs::msg::Point> estimate_person_position_from_depth_bbox(
   const cv::Rect2f & bbox,
   const cv::Mat & depth,
-  const MonocularCameraIntrinsics & intrinsics,
-  const MonocularPositionConfig & monocular,
+  const CameraIntrinsics & intrinsics,
+  const CameraConfig & camera,
   const DepthPositionConfig & depth_config,
   DepthSampleResult * sample = nullptr);
 

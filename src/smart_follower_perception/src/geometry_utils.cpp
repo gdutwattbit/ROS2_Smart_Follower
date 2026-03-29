@@ -67,7 +67,7 @@ void append_window_samples(
 
 }  // namespace
 
-bool is_valid_camera_intrinsics(const MonocularCameraIntrinsics & intrinsics)
+bool is_valid_camera_intrinsics(const CameraIntrinsics & intrinsics)
 {
   return intrinsics.ready &&
          std::isfinite(intrinsics.fx) && intrinsics.fx > 1e-6 &&
@@ -113,8 +113,8 @@ DepthSampleResult sample_depth_from_bbox(
 std::optional<geometry_msgs::msg::Point> estimate_person_position_from_depth_bbox(
   const cv::Rect2f & bbox,
   const cv::Mat & depth,
-  const MonocularCameraIntrinsics & intrinsics,
-  const MonocularPositionConfig & monocular,
+  const CameraIntrinsics & intrinsics,
+  const CameraConfig & camera,
   const DepthPositionConfig & depth_config,
   DepthSampleResult * sample)
 {
@@ -147,8 +147,8 @@ std::optional<geometry_msgs::msg::Point> estimate_person_position_from_depth_bbo
   }
 
   geometry_msgs::msg::Point point;
-  point.x = forward + static_cast<double>(monocular.camera_x_offset_m);
-  point.y = (-forward * du) + static_cast<double>(monocular.camera_y_offset_m);
+  point.x = forward + static_cast<double>(camera.x_offset_m);
+  point.y = (-forward * du) + static_cast<double>(camera.y_offset_m);
   point.z = 0.0;
 
   if (!std::isfinite(point.x) || !std::isfinite(point.y)) {

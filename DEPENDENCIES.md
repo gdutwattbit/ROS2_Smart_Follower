@@ -1,6 +1,6 @@
 # ros2_smart_follower 依赖清单
 
-本文档按 **beta-0.3.0 当前技术路线** 整理，只保留当前运行主线需要的依赖：
+本文档按 **beta-0.3.1 当前技术路线** 整理，只保留当前运行主线需要的依赖：
 - Astra 彩色 + 深度输入
 - YOLO + ReID + Tracker + Lock Manager
 - depth compare 定位
@@ -132,7 +132,7 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 
 当前主线默认模型：
 
-- `models/yolo26n_static_256x320_simplify_e2e.onnx`
+- `models/yolo26n_static_256x320_simplify_e2e_int8.onnx`
 - `models/osnet_x0_5_512.onnx`
 
 说明：

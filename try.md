@@ -1,6 +1,6 @@
 # Smart Follower 调参说明（try.md）
 
-本文只面向 **beta-0.3.0 当前固定技术路线**：
+本文只面向 **beta-0.3.1 当前固定技术路线**：
 - Astra `color + depth`
 - `/camera/get_camera_info` 真实内参
 - YOLO + ReID + Tracker + Lock Manager
@@ -168,9 +168,9 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 
 | 参数 | 默认值 | 作用 | 调参建议 |
 |---|---:|---|---|
-| `monocular.camera_info_service` | `/camera/get_camera_info` | 请求真实相机内参的服务名 | 必须可用 |
-| `monocular.camera_x_offset_m` | `0.175` | 相机相对 `base_footprint` 的前后偏移 | 相机在 base 前方为正 |
-| `monocular.camera_y_offset_m` | `0.01` | 相机相对 `base_footprint` 的左右偏移 | 相机在车体左侧为正 |
+| `camera.info_service` | `/camera/get_camera_info` | 请求真实相机内参的服务名 | 必须可用 |
+| `camera.x_offset_m` | `0.175` | 相机相对 `base_footprint` 的前后偏移 | 相机在 base 前方为正 |
+| `camera.y_offset_m` | `0.01` | 相机相对 `base_footprint` 的左右偏移 | 相机在车体左侧为正 |
 | `depth_compare.min_range_m` | `0.20` | depth 有效最小距离 | 太小会引入近距噪声 |
 | `depth_compare.max_range_m` | `4.00` | depth 有效最大距离 | 室内跟随常用 3~4 米 |
 | `depth_compare.sample_window_px` | `5` | 采样窗口边长 | 越大越稳，但更易吃到背景 |
@@ -183,16 +183,16 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 - `z` 朝上
 
 因此：
-- `camera_x_offset_m > 0`：相机在 base 原点前方
-- `camera_y_offset_m > 0`：相机在车体左侧
+- `x_offset_m > 0`：相机在 base 原点前方
+- `y_offset_m > 0`：相机在车体左侧
 
 你当前固化值表示：
 - 相机位于 base 原点前方 `17.5 cm`
 - 相机位于 base 原点左侧 `1 cm`
 
 #### depth_compare 调参顺序
-1. 先保证 `camera_info_service` 可用，`intrinsics_ready=1`
-2. 再确认 `camera_x_offset_m / camera_y_offset_m`
+1. 先保证 `info_service` 可用，`intrinsics_ready=1`
+2. 再确认 `x_offset_m / y_offset_m`
 3. 如果距离抖动大，先调 `sample_window_px`
 4. 如果经常拿不到位置，先看 `min_valid_samples`
 5. 如果远处噪声多，再收紧 `max_range_m`
@@ -311,13 +311,13 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 
 ### 第一阶段：先保证链路正确
 1. `intrinsics_ready=1`
-2. `camera_info_service` 正常返回真实内参
+2. `info_service` 正常返回真实内参
 3. `/camera/color/image_raw` 与 `/camera/depth/image_raw` 都稳定输入
 4. `/robot1/person_pose` 持续输出
 
 ### 第二阶段：先把“能跟”调出来
-1. `camera_x_offset_m`
-2. `camera_y_offset_m`
+1. `x_offset_m`
+2. `y_offset_m`
 3. `target_distance`
 4. `pid_t.kp / kd`
 5. `pid_r.kp / kd`
@@ -345,8 +345,8 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 ## 6. 最值得记录的实车参数
 
 建议单独记录这几项：
-- `monocular.camera_x_offset_m`
-- `monocular.camera_y_offset_m`
+- `camera.x_offset_m`
+- `camera.y_offset_m`
 - `depth_compare.sample_window_px`
 - `depth_compare.min_valid_samples`
 - `target_distance`

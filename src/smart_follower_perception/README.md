@@ -67,9 +67,9 @@
 - `process_every_n_frames`
 - `yolo.ort.*`
 - `reid.ort.*`
-- `monocular.camera_info_service`
-- `monocular.camera_x_offset_m`
-- `monocular.camera_y_offset_m`
+- `camera.info_service`
+- `camera.x_offset_m`
+- `camera.y_offset_m`
 - `depth_compare.*`
 
 ## 5. 修改入口建议
@@ -82,7 +82,7 @@
 
 ## 6. 当前注意事项
 
-- `camera_info_service` 现在属于必需路径，服务不可用会导致 configure 失败
+- `info_service` 现在属于必需路径，服务不可用会导致 configure 失败
 - depth compare 对深度图对齐质量、采样窗口和有效样本数比较敏感
 - 当前默认模型在 `models/` 目录：
   - `yolo26n_static_256x320_simplify_e2e_int8.onnx`

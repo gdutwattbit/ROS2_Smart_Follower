@@ -1,4 +1,4 @@
-﻿#include <chrono>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -18,9 +18,7 @@
 #include <smart_follower_msgs/msg/follow_command.hpp>
 #include <smart_follower_msgs/msg/person_pose_array.hpp>
 
-#ifdef HAVE_ASTRA_CAMERA_MSGS
 #include <astra_camera_msgs/srv/get_camera_info.hpp>
-#endif
 
 #include "smart_follower_perception/constants.hpp"
 #include "smart_follower_perception/frame_sync.hpp"
@@ -49,7 +47,7 @@ public:
       get_logger(),
       *get_clock(),
       params_,
-      monocular_intrinsics_,
+      camera_intrinsics_,
       stats_,
       tracker_,
       lock_manager_,
@@ -61,10 +59,10 @@ public:
   }
 
 private:
-  static MonocularCameraIntrinsics camera_info_to_intrinsics(
+  static CameraIntrinsics camera_info_to_intrinsics(
     const sensor_msgs::msg::CameraInfo & info)
   {
-    MonocularCameraIntrinsics intrinsics;
+    CameraIntrinsics intrinsics;
     intrinsics.image_width = static_cast<int>(info.width);
     intrinsics.image_height = static_cast<int>(info.height);
     if (info.k.size() >= 9) {
@@ -125,20 +123,20 @@ private:
 
   void sync_intrinsics_diagnostics()
   {
-    stats_.intrinsics_ready = is_valid_camera_intrinsics(monocular_intrinsics_);
+    stats_.intrinsics_ready = is_valid_camera_intrinsics(camera_intrinsics_);
     stats_.intrinsics_source = intrinsics_source_;
-    stats_.camera_fx = monocular_intrinsics_.fx;
-    stats_.camera_fy = monocular_intrinsics_.fy;
-    stats_.camera_cx = monocular_intrinsics_.cx;
-    stats_.camera_cy = monocular_intrinsics_.cy;
+    stats_.camera_fx = camera_intrinsics_.fx;
+    stats_.camera_fy = camera_intrinsics_.fy;
+    stats_.camera_cx = camera_intrinsics_.cx;
+    stats_.camera_cy = camera_intrinsics_.cy;
   }
 
   void set_intrinsics(
-    const MonocularCameraIntrinsics & intrinsics,
+    const CameraIntrinsics & intrinsics,
     const std::string & source,
     bool log_result)
   {
-    monocular_intrinsics_ = intrinsics;
+    camera_intrinsics_ = intrinsics;
     intrinsics_source_ = source;
     sync_intrinsics_diagnostics();
 
@@ -154,10 +152,9 @@ private:
 
   bool try_configure_intrinsics_from_service(bool log_result)
   {
-#ifdef HAVE_ASTRA_CAMERA_MSGS
     using GetCameraInfo = astra_camera_msgs::srv::GetCameraInfo;
 
-    if (params_.monocular.camera_info_service.empty()) {
+    if (params_.camera.info_service.empty()) {
       return false;
     }
 
@@ -169,7 +166,7 @@ private:
     const auto suffix = std::to_string(
       std::chrono::steady_clock::now().time_since_epoch().count());
     auto helper = std::make_shared<rclcpp::Node>("perception_intrinsics_client_" + suffix);
-    auto client = helper->create_client<GetCameraInfo>(params_.monocular.camera_info_service);
+    auto client = helper->create_client<GetCameraInfo>(params_.camera.info_service);
     rclcpp::executors::SingleThreadedExecutor executor;
     executor.add_node(helper);
 
@@ -181,7 +178,7 @@ private:
             get_logger(),
             "[%s] camera intrinsics service unavailable: %s (attempt %d/%d)",
             kRuntimeVersion,
-            params_.monocular.camera_info_service.c_str(),
+            params_.camera.info_service.c_str(),
             attempt,
             kMaxAttempts);
         }
@@ -201,7 +198,7 @@ private:
             get_logger(),
             "[%s] camera intrinsics service timed out: %s (attempt %d/%d)",
             kRuntimeVersion,
-            params_.monocular.camera_info_service.c_str(),
+            params_.camera.info_service.c_str(),
             attempt,
             kMaxAttempts);
         }
@@ -218,7 +215,7 @@ private:
             get_logger(),
             "[%s] camera intrinsics service failed: %s message=%s (attempt %d/%d)",
             kRuntimeVersion,
-            params_.monocular.camera_info_service.c_str(),
+            params_.camera.info_service.c_str(),
             response ? response->message.c_str() : "null response",
             attempt,
             kMaxAttempts);
@@ -236,7 +233,7 @@ private:
             get_logger(),
             "[%s] camera intrinsics service returned invalid calibration: %s (attempt %d/%d)",
             kRuntimeVersion,
-            params_.monocular.camera_info_service.c_str(),
+            params_.camera.info_service.c_str(),
             attempt,
             kMaxAttempts);
         }
@@ -254,7 +251,7 @@ private:
           kRuntimeVersion,
           attempt,
           kMaxAttempts);
-        set_intrinsics(monocular_intrinsics_, intrinsics_source_, true);
+        set_intrinsics(camera_intrinsics_, intrinsics_source_, true);
       }
       success = true;
       break;
@@ -262,35 +259,22 @@ private:
 
     executor.remove_node(helper);
     return success;
-#else
-    (void)log_result;
-    return false;
-#endif
   }
 
-  bool refresh_monocular_intrinsics(bool log_result)
+  bool refresh_camera_intrinsics(bool log_result)
   {
     if (try_configure_intrinsics_from_service(log_result)) {
       return true;
     }
 
-#ifndef HAVE_ASTRA_CAMERA_MSGS
-    if (log_result) {
-      RCLCPP_ERROR(
-        get_logger(),
-        "[%s] astra_camera_msgs not available at build time; real camera intrinsics service is required",
-        kRuntimeVersion);
-    }
-#else
     if (log_result) {
       RCLCPP_ERROR(
         get_logger(),
         "[%s] camera intrinsics are required but could not be loaded from service: %s",
         kRuntimeVersion,
-        params_.monocular.camera_info_service.c_str());
+        params_.camera.info_service.c_str());
     }
-#endif
-    monocular_intrinsics_ = MonocularCameraIntrinsics{};
+    camera_intrinsics_ = CameraIntrinsics{};
     intrinsics_source_ = "missing";
     sync_intrinsics_diagnostics();
     return false;
@@ -438,11 +422,11 @@ private:
     params_ = candidate;
     configure_modules_from_params();
     configure_models();
-    if (!refresh_monocular_intrinsics(true)) {
+    if (!refresh_camera_intrinsics(true)) {
       params_ = previous_params;
       configure_modules_from_params();
       configure_models();
-      refresh_monocular_intrinsics(false);
+      refresh_camera_intrinsics(false);
       rcl_interfaces::msg::SetParametersResult result;
       result.successful = false;
       result.reason = "camera intrinsics service unavailable";
@@ -479,7 +463,7 @@ private:
     ::smart_follower_perception::load_parameters(*this, params_);
     configure_modules_from_params();
     configure_models();
-    if (!refresh_monocular_intrinsics(true)) {
+    if (!refresh_camera_intrinsics(true)) {
       return CallbackReturn::FAILURE;
     }
     recreate_interfaces(false);
@@ -552,7 +536,7 @@ private:
     tracker_.reset();
     lock_manager_.reset();
     stats_.reset();
-    monocular_intrinsics_ = MonocularCameraIntrinsics{};
+    camera_intrinsics_ = CameraIntrinsics{};
     intrinsics_source_ = "uninitialized";
     sync_intrinsics_diagnostics();
     return CallbackReturn::SUCCESS;
@@ -566,7 +550,7 @@ private:
   YoloDetector yolo_;
   ReidExtractor reid_;
   diagnostic_updater::Updater diagnostics_;
-  MonocularCameraIntrinsics monocular_intrinsics_;
+  CameraIntrinsics camera_intrinsics_;
   std::string intrinsics_source_{"uninitialized"};
   PerceptionPipeline pipeline_;
 

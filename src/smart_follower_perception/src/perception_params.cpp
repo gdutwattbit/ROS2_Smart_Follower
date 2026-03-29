@@ -52,9 +52,9 @@ void declare_parameters(rclcpp_lifecycle::LifecycleNode & node, const Perception
   node.declare_parameter("tracking.weights.center", defaults.weights.w_center);
   node.declare_parameter("tracking.weights.appearance", defaults.weights.w_appearance);
 
-  node.declare_parameter("monocular.camera_info_service", defaults.monocular.camera_info_service);
-  node.declare_parameter("monocular.camera_x_offset_m", defaults.monocular.camera_x_offset_m);
-  node.declare_parameter("monocular.camera_y_offset_m", defaults.monocular.camera_y_offset_m);
+  node.declare_parameter("camera.info_service", defaults.camera.info_service);
+  node.declare_parameter("camera.x_offset_m", defaults.camera.x_offset_m);
+  node.declare_parameter("camera.y_offset_m", defaults.camera.y_offset_m);
 
   node.declare_parameter("depth_compare.min_range_m", defaults.depth_compare.min_range_m);
   node.declare_parameter("depth_compare.max_range_m", defaults.depth_compare.max_range_m);
@@ -111,9 +111,9 @@ void load_parameters(rclcpp_lifecycle::LifecycleNode & node, PerceptionParams & 
   params.weights.w_center = node.get_parameter("tracking.weights.center").as_double();
   params.weights.w_appearance = node.get_parameter("tracking.weights.appearance").as_double();
 
-  params.monocular.camera_info_service = node.get_parameter("monocular.camera_info_service").as_string();
-  params.monocular.camera_x_offset_m = node.get_parameter("monocular.camera_x_offset_m").as_double();
-  params.monocular.camera_y_offset_m = node.get_parameter("monocular.camera_y_offset_m").as_double();
+  params.camera.info_service = node.get_parameter("camera.info_service").as_string();
+  params.camera.x_offset_m = node.get_parameter("camera.x_offset_m").as_double();
+  params.camera.y_offset_m = node.get_parameter("camera.y_offset_m").as_double();
 
   params.depth_compare.min_range_m = node.get_parameter("depth_compare.min_range_m").as_double();
   params.depth_compare.max_range_m = node.get_parameter("depth_compare.max_range_m").as_double();
@@ -166,9 +166,9 @@ void apply_parameter_override(PerceptionParams & target, const rclcpp::Parameter
   else if (name == "tracking.weights.iou") target.weights.w_iou = param.as_double();
   else if (name == "tracking.weights.center") target.weights.w_center = param.as_double();
   else if (name == "tracking.weights.appearance") target.weights.w_appearance = param.as_double();
-  else if (name == "monocular.camera_info_service") target.monocular.camera_info_service = param.as_string();
-  else if (name == "monocular.camera_x_offset_m") target.monocular.camera_x_offset_m = param.as_double();
-  else if (name == "monocular.camera_y_offset_m") target.monocular.camera_y_offset_m = param.as_double();
+  else if (name == "camera.info_service") target.camera.info_service = param.as_string();
+  else if (name == "camera.x_offset_m") target.camera.x_offset_m = param.as_double();
+  else if (name == "camera.y_offset_m") target.camera.y_offset_m = param.as_double();
   else if (name == "depth_compare.min_range_m") target.depth_compare.min_range_m = param.as_double();
   else if (name == "depth_compare.max_range_m") target.depth_compare.max_range_m = param.as_double();
   else if (name == "depth_compare.sample_window_px") target.depth_compare.sample_window_px = std::max<int>(1, static_cast<int>(param.as_int()));

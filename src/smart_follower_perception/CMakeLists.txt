@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.8)
 project(smart_follower_perception)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -21,7 +21,7 @@ find_package(diagnostic_msgs REQUIRED)
 find_package(smart_follower_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(astra_camera_msgs QUIET)
+find_package(astra_camera_msgs REQUIRED)
 
 set(SMART_FOLLOWER_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party")
 set(SMART_FOLLOWER_WHEELTEC_THIRD_PARTY_DIR "$ENV{HOME}/wheeltec_ros2/third_party")
@@ -115,10 +115,7 @@ target_link_libraries(perception_node
   Eigen3::Eigen
 )
 
-if(astra_camera_msgs_FOUND)
-  target_compile_definitions(perception_node PRIVATE HAVE_ASTRA_CAMERA_MSGS=1)
-  ament_target_dependencies(perception_node astra_camera_msgs)
-endif()
+ament_target_dependencies(perception_node astra_camera_msgs)
 
 if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
   set_target_properties(perception_node PROPERTIES

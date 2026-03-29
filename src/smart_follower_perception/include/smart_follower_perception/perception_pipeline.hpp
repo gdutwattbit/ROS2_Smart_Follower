@@ -30,7 +30,7 @@ public:
     const rclcpp::Logger & logger,
     rclcpp::Clock & clock,
     PerceptionParams & params,
-    const MonocularCameraIntrinsics & intrinsics,
+    const CameraIntrinsics & intrinsics,
     PerceptionDiagnostics & stats,
     Tracker & tracker,
     LockManager & lock_manager,
@@ -59,7 +59,7 @@ private:
   rclcpp::Logger logger_;
   rclcpp::Clock & clock_;
   PerceptionParams & params_;
-  const MonocularCameraIntrinsics & intrinsics_;
+  const CameraIntrinsics & intrinsics_;
   PerceptionDiagnostics & stats_;
   Tracker & tracker_;
   LockManager & lock_manager_;

@@ -52,7 +52,7 @@ PerceptionPipeline::PerceptionPipeline(
   const rclcpp::Logger & logger,
   rclcpp::Clock & clock,
   PerceptionParams & params,
-  const MonocularCameraIntrinsics & intrinsics,
+  const CameraIntrinsics & intrinsics,
   PerceptionDiagnostics & stats,
   Tracker & tracker,
   LockManager & lock_manager,
@@ -341,7 +341,7 @@ void PerceptionPipeline::process_detection_result(
     lock_manager_.lock_id(),
     lock_manager_.lock_state(),
     intrinsics_,
-    params_.monocular,
+    params_.camera,
     params_.depth_compare,
     params_.base_frame);
   const auto message_end = Clock::now();

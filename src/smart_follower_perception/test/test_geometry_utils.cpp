@@ -10,8 +10,8 @@
 
 using smart_follower_perception::DepthPositionConfig;
 using smart_follower_perception::DepthSampleResult;
-using smart_follower_perception::MonocularCameraIntrinsics;
-using smart_follower_perception::MonocularPositionConfig;
+using smart_follower_perception::CameraIntrinsics;
+using smart_follower_perception::CameraConfig;
 using smart_follower_perception::estimate_person_position_from_depth_bbox;
 using smart_follower_perception::is_valid_camera_intrinsics;
 using smart_follower_perception::sample_depth_from_bbox;
@@ -19,9 +19,9 @@ using smart_follower_perception::sample_depth_from_bbox;
 namespace
 {
 
-MonocularCameraIntrinsics make_intrinsics()
+CameraIntrinsics make_intrinsics()
 {
-  MonocularCameraIntrinsics intrinsics;
+  CameraIntrinsics intrinsics;
   intrinsics.fx = 500.0;
   intrinsics.fy = 500.0;
   intrinsics.cx = 320.0;
@@ -32,11 +32,11 @@ MonocularCameraIntrinsics make_intrinsics()
   return intrinsics;
 }
 
-MonocularPositionConfig make_monocular_config()
+CameraConfig make_camera_config()
 {
-  MonocularPositionConfig config;
-  config.camera_x_offset_m = 0.175F;
-  config.camera_y_offset_m = 0.01F;
+  CameraConfig config;
+  config.x_offset_m = 0.175F;
+  config.y_offset_m = 0.01F;
   return config;
 }
 
@@ -84,7 +84,7 @@ TEST(GeometryUtils, DepthSamplingUsesMedianAndIgnoresInvalidValues)
 TEST(GeometryUtils, DepthPositionRejectsInsufficientValidSamples)
 {
   const auto intrinsics = make_intrinsics();
-  auto monocular = make_monocular_config();
+  auto camera = make_camera_config();
   DepthPositionConfig depth_config;
   depth_config.min_range_m = 0.2F;
   depth_config.max_range_m = 4.0F;
@@ -102,7 +102,7 @@ TEST(GeometryUtils, DepthPositionRejectsInsufficientValidSamples)
     bbox,
     depth,
     intrinsics,
-    monocular,
+    camera,
     depth_config,
     &sample);
 
@@ -114,9 +114,9 @@ TEST(GeometryUtils, DepthPositionRejectsInsufficientValidSamples)
 TEST(GeometryUtils, DepthPositionProducesExpectedLateralSign)
 {
   const auto intrinsics = make_intrinsics();
-  auto monocular = make_monocular_config();
-  monocular.camera_x_offset_m = 0.175F;
-  monocular.camera_y_offset_m = 0.01F;
+  auto camera = make_camera_config();
+  camera.x_offset_m = 0.175F;
+  camera.y_offset_m = 0.01F;
 
   DepthPositionConfig depth_config;
   depth_config.min_range_m = 0.2F;
@@ -126,16 +126,16 @@ TEST(GeometryUtils, DepthPositionProducesExpectedLateralSign)
 
   cv::Mat depth(480, 640, CV_16UC1, cv::Scalar(1500));
   const auto left = estimate_person_position_from_depth_bbox(
-    cv::Rect2f(120.0F, 160.0F, 80.0F, 200.0F), depth, intrinsics, monocular, depth_config);
+    cv::Rect2f(120.0F, 160.0F, 80.0F, 200.0F), depth, intrinsics, camera, depth_config);
   const auto right = estimate_person_position_from_depth_bbox(
-    cv::Rect2f(440.0F, 160.0F, 80.0F, 200.0F), depth, intrinsics, monocular, depth_config);
+    cv::Rect2f(440.0F, 160.0F, 80.0F, 200.0F), depth, intrinsics, camera, depth_config);
 
   ASSERT_TRUE(left.has_value());
   ASSERT_TRUE(right.has_value());
   EXPECT_NEAR(left->x, 1.675, 1e-3);
   EXPECT_NEAR(right->x, 1.675, 1e-3);
-  EXPECT_GT(left->y, monocular.camera_y_offset_m);
-  EXPECT_LT(right->y, monocular.camera_y_offset_m);
+  EXPECT_GT(left->y, camera.y_offset_m);
+  EXPECT_LT(right->y, camera.y_offset_m);
 }
 TEST(GeometryUtils, DepthSamplingRecoversUsingLowerBodyWindowsWhenTopIsCutOff)
 {

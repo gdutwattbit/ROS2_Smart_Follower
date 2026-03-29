@@ -83,8 +83,8 @@ smart_follower_msgs::msg::TrackedPerson track_to_message(
   const Track & track,
   const cv::Mat & depth_image,
   const cv::Size & image_size,
-  const MonocularCameraIntrinsics & intrinsics,
-  const MonocularPositionConfig & monocular,
+  const CameraIntrinsics & intrinsics,
+  const CameraConfig & camera,
   const DepthPositionConfig & depth_config,
   MessageBuildStats * stats);
 
@@ -95,8 +95,8 @@ PersonPoseBuildResult build_person_pose_array(
   const cv::Size & image_size,
   int lock_id,
   uint8_t lock_state,
-  const MonocularCameraIntrinsics & intrinsics,
-  const MonocularPositionConfig & monocular,
+  const CameraIntrinsics & intrinsics,
+  const CameraConfig & camera,
   const DepthPositionConfig & depth_config,
   const std::string & base_frame);
 
