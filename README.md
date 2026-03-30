@@ -1,163 +1,164 @@
-ï»¿# ROS2 Smart Follower
+# ROS2 Smart Follower
 
-é—ˆãˆ æ‚œéæˆ£å¸—å¨²?/ ROS 2 Humble é¨å‹ªç¶†æµ£å¶†æ«¤é‘³å€Ÿçª¡é—…å¿šæº…æ¤¤åœ­æ´°éŠ†?
+ÃæÏòÊ÷İ®ÅÉ / ROS 2 Humble µÄµÍÎ»ÖÇÄÜ¸úËæ³µÏîÄ¿¡£
 
-è¤°æ’³å¢ é¥å“„ç•¾é¶â‚¬éˆîˆçŸ¾ç»¾åŒ¡ç´°
-- é°ç†ºç…¡é”›æ­’OLO + ReID + Tracker + Lock Manager
-- ç€¹æ°«ç¶…é”›æ¬°stra è¤°â•„å£Š + å¨£åå®³æˆæ’³å†é”›å®’epth compare æ¶“å©šæ‘¼ç’º?
-- éºÑƒåŸ—é”›?0Hz ç’ºç†¼æ®¢éºÑƒåŸ— + é­î…Ÿæ¤‚æ£°å‹¬ç¥´ç›ãƒ¥æŠš + ç“’å‘­ï¼å¨‰ãˆ¤ä¼©é—…?+ é¸å›¦æŠ¤æµ èŒ¶î—†
+µ±Ç°¹Ì¶¨¼¼ÊõÂ·Ïß£º
+- ¸ĞÖª£ºYOLO + ReID + Tracker + Lock Manager
+- ¶¨Î»£ºAstra ²ÊÉ« + Éî¶ÈÊäÈë£¬depth compare Ö÷Á´Â·
+- ¿ØÖÆ£º20Hz ¸úËæ¿ØÖÆ + ¶ÌÊ±Ô¤²â²¹Ö¡ + ³¬Éù²¨±ÜÕÏ + Ö¸ÁîÖÙ²Ã
 
-> è¤°æ’³å¢ é™æˆç«·éå›©î„·é”›æ­šbeta-0.3.2`
-
----
-
-## 0. beta-0.3.2 æœ¬è½®æ›´æ–°
-
-è¿™ä¸€è½®ä¸»çº¿æ”¹åŠ¨æ”¶å£åˆ° **beta-0.3.2**ï¼Œé‡ç‚¹æ˜¯æŠŠè·Ÿéšæ§åˆ¶å’Œç°åœºè°ƒå‚è¿›ä¸€æ­¥æ”¶å®ï¼š
-- follower è½¬å‘ä¾§ä»ç®€å•å¹³æ»‘æ”¹ä¸ºè½»é‡å¡å°”æ›¼æ»¤æ³¢ï¼Œæ”¯æŒ `steering_kalman.*` åœ¨çº¿è°ƒå‚
-- ä¿ç•™ `v_max / w_max / dv_max / dw_max` è¿™ç»„è¾“å‡ºç¡¬é™åˆ¶ï¼Œä½†åˆ é™¤é¢å¤–çš„ `theta_deadzone`ã€å¤§è½¬è§’è‡ªåŠ¨é™é€Ÿå’Œç›®æ ‡é€Ÿåº¦ä¼°è®¡ç¡¬æˆªæ–­
-- `try.md` é‡å†™ä¸ºç°åœºè°ƒå‚ä¸æ’æŸ¥é€ŸæŸ¥ï¼Œè¡¥é½ `ros2 param get/set`ã€è¯é¢˜è§‚æµ‹å’Œæ¨èè°ƒå‚é¡ºåº
-- VM å·¥ä½œåŒºå·²åŒæ­¥å¹¶å®Œæˆ `smart_follower_control` ç¼–è¯‘éªŒè¯ï¼Œä¾¿äºåç»­ç›´æ¥å›´ç»•å®è½¦æ‰‹æ„Ÿç»§ç»­ç»†è°ƒ
+> µ±Ç°·¢²¼±êÇ©£º`beta-0.3.2`
 
 ---
 
-## 1. è¤°æ’³å¢ é–¾æçŸ¾å§’å‚î
+## 0. beta-0.3.2 ±¾ÂÖ¸üĞÂ
+
+ÕâÒ»ÂÖÖ÷Ïß¸Ä¶¯ÒÑ¾­ÊÕ¿Úµ½ **beta-0.3.2**£¬ÖØµã²»ÊÇ¼ÌĞø¼Ó¹¦ÄÜ£¬¶øÊÇ°Ñ¿ØÖÆÁ´ºÍÏÖ³¡µ÷²ÎÕæÕıÊÕÊµ£º
+
+- follower ×ªÏò²à´Ó¼òµ¥Æ½»¬¸ÄÎªÇáÁ¿¿¨¶ûÂüÂË²¨£¬¿ª·Å `steering_kalman.process_noise`¡¢`steering_kalman.measurement_noise`¡¢`steering_kalman.initial_covariance` ¹©ÔÚÏßÈÈµ÷
+- ±£Áô `limits.v_max`¡¢`limits.w_max`¡¢`limits.dv_max`¡¢`limits.dw_max` Õâ×é×îÖÕÊä³öÓ²ÏŞÖÆ£¬µ«É¾³ı¶îÍâµÄ `theta_deadzone`¡¢´ó×ª½Ç×Ô¶¯½µËÙºÍ `max_target_speed_mps` Ä¿±êËÙ¶ÈÓ²½Ø¶Ï
+- `try.md` ÖØĞ´ÎªÏÖ³¡µ÷²ÎÓëÅÅ²éËÙ²é£¬²¹Æë `ros2 param get/set`¡¢»°Ìâ¹Û²âÃüÁîºÍÍÆ¼öµ÷²ÎË³Ğò
+- VM ¹¤×÷ÇøÒÑÍ¬²½²¢Íê³É `smart_follower_control` ±àÒëÑéÖ¤£¬·½±ãºóĞøÎ§ÈÆÊµ³µÊÖ¸Ğ¼ÌĞøÏ¸µ÷
+
+---
+
+## 1. µ±Ç°Á´Â·¸ÅÀÀ
 
 ```text
 /camera/color/image_raw + /camera/depth/image_raw
-                    éˆ«?
+                    ¡ı
                   YOLO
-                    éˆ«?
+                    ¡ı
                   ReID
-                    éˆ«?
+                    ¡ı
                  Tracker
-                    éˆ«?
+                    ¡ı
                Lock Manager
-                    éˆ«?
-      depth compare ç€¹æ°«ç¶…é”›å†box æ¶“å¬ªå´é–®ã„§ç¥é™?+ mediané”›?
-                    éˆ«?
+                    ¡ı
+      depth compare ¶¨Î»£¨bbox ÏÂ°ë²¿´°¿Ú + median£©
+                    ¡ı
                 /person_pose
-                    éˆ«?
+                    ¡ı
 Follower / Obstacle / Arbiter
-                    éˆ«?
+                    ¡ı
                   /cmd_vel
 ```
 
-è¤°æ’³å¢ ç’æî…¸ç‘•ä½ºå£é”›?
-- æµ£è·¨æ•¤æå©šå™ºå¦¯â€³ç€·ç¼å‹«æ‚é”›æ­šyolo26n_static_256x320_simplify_e2e_int8.onnx + osnet_x0_5_512.onnx`
-- `TrackedPerson.position` é¢åî‡®æ¦»æ„­ç¹æ´ï¹€æµ˜é™æ ¨ç‰±å¯°æ¥€åŸŒ
-- `/person_pose`éŠ†ä½¹å¸¶é’æœµæ™¶éºãƒ¥å½›éŠ†ä½ºæ•“é›è—‰æ‡†éˆç†»î”‘æ¶“è½°ç¹šé¸ä½ºÇ”ç€¹?
-- perception æµ¼æ°³î‡¬å§¹?Astra é¨?`/camera/get_camera_info` æµ£æ»€è´Ÿéªç†·ç–„éå‘­å¼¬é‰ãƒ¦ç°®
+µ±Ç°Éè¼ÆÒªµã£º
+- Ê¹ÓÃÇáÁ¿Ä£ĞÍ×éºÏ£º`yolo26n_static_256x320_simplify_e2e_int8.onnx + osnet_x0_5_512.onnx`
+- `TrackedPerson.position` ÓÉ¶ÔÆëÉî¶ÈÍ¼È¡ÑùµÃµ½
+- `/person_pose`¡¢¿ØÖÆ²à½Ó¿Ú¡¢ÉúÃüÖÜÆÚĞĞÎª±£³ÖÎÈ¶¨
+- perception »áÇëÇó Astra µÄ `/camera/get_camera_info` ×÷ÎªÕæÊµÄÚ²ÎÀ´Ô´
 
 ---
 
-## 2. æµ æ’³ç°±ç¼æ’´ç€¯
+## 2. ²Ö¿â½á¹¹
 
 ```text
 ros2_smart_follower/
-éˆ¹æº¾æ”¢ src/
-éˆ¹? éˆ¹æº¾æ”¢ smart_follower_msgs/
-éˆ¹? éˆ¹æº¾æ”¢ smart_follower_perception/
-éˆ¹? éˆ¹æº¾æ”¢ smart_follower_control/
-éˆ¹? éˆ¹æ–ºæ”¢ smart_follower_bringup/
-éˆ¹æº¾æ”¢ docs/
-éˆ¹æº¾æ”¢ models/
-éˆ¹æº¾æ”¢ scripts/
-éˆ¹æº¾æ”¢ README.md
-éˆ¹æº¾æ”¢ CHANGELOG.md
-éˆ¹æº¾æ”¢ DEPENDENCIES.md
-éˆ¹æ–ºæ”¢ try.md
+©À©¤ src/
+©¦  ©À©¤ smart_follower_msgs/
+©¦  ©À©¤ smart_follower_perception/
+©¦  ©À©¤ smart_follower_control/
+©¦  ©¸©¤ smart_follower_bringup/
+©À©¤ docs/
+©À©¤ models/
+©À©¤ scripts/
+©À©¤ README.md
+©À©¤ CHANGELOG.md
+©À©¤ DEPENDENCIES.md
+©¸©¤ try.md
 ```
 
 ---
 
-## 3. éšå‹«å¯˜é‘±å²ƒçŸ—
+## 3. ¸÷°üÖ°Ôğ
 
 ### `smart_follower_msgs`
-ç€¹æ°«ç®Ÿæ¤¤åœ­æ´°å¨‘å Ÿä¼…é”›?
+¶¨ÒåÏîÄ¿ÏûÏ¢£º
 - `TrackedPerson.msg`
 - `PersonPoseArray.msg`
 - `FollowCommand.msg`
 
 ### `smart_follower_perception`
-ç’ç†»çŸ—é”›?
-- è¤°â•„å£Šé¥æƒ§å„š + å¨£åå®³é¥ç‚¬å¸´é?
-- YOLO å¦«â‚¬å¨´?
-- ReID é—ç‘°ç·›é»æ„¬å½‡
-- æ¾¶æ°±æ´°éå›ªçª¡éŸª?
-- é©î†½çˆ£é–¿ä½¸ç•¾ / é’å›¦æ±‰ç»›æ «æš
-- depth compare ç€¹æ°«ç¶…
-- é™æˆç«· `/person_pose`
+¸ºÔğ£º
+- ²ÊÉ«Í¼Ïñ + Éî¶ÈÍ¼½ÓÈë
+- YOLO ¼ì²â
+- ReID ÌØÕ÷ÌáÈ¡
+- ¶àÄ¿±ê¸ú×Ù
+- Ä¿±êËø¶¨ / ÇĞÈË²ßÂÔ
+- depth compare ¶¨Î»
+- ·¢²¼ `/person_pose`
 
 ### `smart_follower_control`
-ç’ç†»çŸ—é”›?
-- ç’ºç†¼æ®¢éºÑƒåŸ—
-- 20Hz éºÑƒåŸ—ç›ãƒ¥æŠšæ£°å‹¬ç¥´
-- å®¸ï¹€å½¸ç“’å‘­ï¼å¨‰ãˆ¤å™°é?
-- ç“’å‘­ï¼å¨‰ãˆ¤ä¼©é—…?
-- é¸å›¦æŠ¤æµ èŒ¶î—†
-- é–¿î†¾æ´éºÑƒåŸ—
+¸ºÔğ£º
+- ¸úËæ¿ØÖÆ
+- 20Hz ¿ØÖÆ²¹Ö¡Ô¤²â
+- ×óÓÒ³¬Éù²¨²ÉÑù
+- ³¬Éù²¨±ÜÕÏ
+- Ö¸ÁîÖÙ²Ã
+- ¼üÅÌ¿ØÖÆ
 
 ### `smart_follower_bringup`
-ç’ç†»çŸ—é”›?
-- launch ç¼å‹­ç²
-- æ¦›æ¨¿î…» YAML é™å‚›æšŸ
-- å¦¯â€³ç€·ç’ºîˆšç·ç‘•å—™æ´Š
+¸ºÔğ£º
+- launch ×éÖ¯
+- Ä¬ÈÏ YAML ²ÎÊı
+- Ä£ĞÍÂ·¾¶¸²¸Ç
 
 ---
 
-## 4. è¤°æ’³å¢ éºã„¨å´˜å¦¯â€³ç€·æ¶“åº¤ç¹ç›å²€ç²éš?
+## 4. µ±Ç°ÍÆ¼öÄ£ĞÍÓëÔËĞĞ×éºÏ
 
-æ¦›æ¨¿î…»å¦¯â€³ç€·ç¼å‹«æ‚é”›?
+Ä¬ÈÏÄ£ĞÍ×éºÏ£º
 - `models/yolo26n_static_256x320_simplify_e2e_int8.onnx`
 - `models/osnet_x0_5_512.onnx`
 
-è¤°æ’³å¢ éºã„¨å´˜ç»¾è·¨â–¼é™å‚›æšŸé”›?
+µ±Ç°ÍÆ¼öÏß³Ì²ÎÊı£º
 - YOLO ORT: `intra_op_num_threads=1`, `inter_op_num_threads=1`, `sequential`
 - ReID ORT: `intra_op_num_threads=1`, `inter_op_num_threads=1`, `sequential`
 
-è¤°æ’³å¢ éºã„¨å´˜é‘ºå‚šîš”é”›?
-- é©å‘Šæº€æˆæ’³å†é”›æ°±å®³ 30fps
-- perception æ¾¶å‹­æ‚Šé”›æ­šprocess_every_n_frames=2`
-- follower éºÑƒåŸ—æˆæ’³åš­é”›?0Hz
-- æ¶“î…¢æ£¿æ¸šæ¿‹æ½¬éºÑƒåŸ—æ¸šÑ…ç…­éƒè·ºçˆ¶é–«ç†·å®³æ£°å‹¬ç¥´ç›ãƒ¥æŠš
-- follower æ¦›æ¨¿î…»é©î†½çˆ£ç’ºæ¿ˆî‡é”›æ­š0.6m`
+µ±Ç°ÍÆ¼ö½Ú×à£º
+- Ïà»úÊäÈë£ºÔ¼ 30fps
+- perception ´¦Àí£º`process_every_n_frames=2`
+- follower ¿ØÖÆÊä³ö£º20Hz
+- ÖĞ¼äÒÀ¿¿¿ØÖÆ²à¶ÌÊ±³£ËÙ¶ÈÔ¤²â²¹Ö¡
+- follower Ä¬ÈÏÄ¿±ê¾àÀë£º`0.6m`
 
 ---
 
-## 5. éšîˆšå§©é‚ç‘°ç´¡
+## 5. Æô¶¯·½Ê½
 
-### çå¿šæº…ç€¹ç‘°æ«’éå‘¯îƒ‡æ¶“å¤‹æŸŸæ¸šæ¿Šç¦†ç€¹ç‚ºæª¯ç’ºîˆšç·
+### Ğ¡³µÈİÆ÷ÄÚµÚÈı·½ÒÀÀµÊµ¼ÊÂ·¾¶
 
-é¦ã„¥çš¬æ?`ros2` ç€¹ç‘°æ«’éå‘­ç–„éŒãƒ¥åŸŒé”›?
+ÔÚĞ¡³µ `ros2` ÈİÆ÷ÄÚÊµ²éµ½£º
 
-- **ONNX Runtime éåœ­æ´°è¤°?*
+- **ONNX Runtime ¸ùÄ¿Â¼**
   - `/home/wheeltec/wheeltec_ros2/third_party/onnxruntime-linux-aarch64-1.24.3`
-- **ONNX Runtime æ¾¶å­˜æƒæµ ?*
+- **ONNX Runtime Í·ÎÄ¼ş**
   - `/home/wheeltec/wheeltec_ros2/third_party/onnxruntime-linux-aarch64-1.24.3/include`
-- **ONNX Runtime é”ã„¦â‚¬ä½¸ç°±**
+- **ONNX Runtime ¶¯Ì¬¿â**
   - `/home/wheeltec/wheeltec_ros2/third_party/onnxruntime-linux-aarch64-1.24.3/lib/libonnxruntime.so`
-- **ONNX Runtime CMake é–°å¶‡ç–†**
+- **ONNX Runtime CMake ÅäÖÃ**
   - `/home/wheeltec/wheeltec_ros2/third_party/onnxruntime-linux-aarch64-1.24.3/lib/cmake/onnxruntime`
 - **ONNX Runtime pkg-config**
   - `/home/wheeltec/wheeltec_ros2/third_party/onnxruntime-linux-aarch64-1.24.3/lib/pkgconfig/libonnxruntime.pc`
 
-- **libgpiod ç€¹å¤î—Šéåœ­æ´°è¤°?*
+- **libgpiod °²×°¸ùÄ¿Â¼**
   - `/home/wheeltec/wheeltec_ros2/third_party/libgpiod`
-- **libgpiod æ¾¶å­˜æƒæµ ?*
+- **libgpiod Í·ÎÄ¼ş**
   - `/home/wheeltec/wheeltec_ros2/third_party/libgpiod/include/gpiod.h`
-- **libgpiod é”ã„¦â‚¬ä½¸ç°±**
+- **libgpiod ¶¯Ì¬¿â**
   - `/home/wheeltec/wheeltec_ros2/third_party/libgpiod/lib/libgpiod.so`
-- **libgpiod å©§æ„®çˆœé©î†¼ç¶**
+- **libgpiod Ô´ÂëÄ¿Â¼**
   - `/home/wheeltec/wheeltec_ros2/third_party/libgpiod-2.1.3`
 
-> å¨‰ã„¦å‰°é”›æ°³ç¹–æ¶“ã‚…îšœæ´æ’¶æ´°é“å¶…æ¹ªç€¹ç‘°æ«’é–²å±¾æ§¸ç€›æ¨ºæ¹ªé¨å‹¶ç´æµ£?*æ¶“å¶…æ¹ªéˆîƒ¿ç²¨æ´æ’¶æ®‘ `third_party/` æ¶“?*éŠ†?
-> è¤°æ’³å¢ æ¶“è¤åšæµ ï½‡çˆœå®¸èŒ¬ç²¡éšå±¾æ¤‚ç›ãƒ¤ç¬‚é”›?
-> - é„æƒ§ç´¡ç¼æ¿†î‡®ç’ºîˆšç· `/home/wheeltec/wheeltec_ros2/third_party/...`
-> - éœîˆšî•¨é™æ©€å™ºç’ºîˆšç· `$HOME/wheeltec_ros2/third_party/...`
-> æ©æ¬ç‰±é—å……å¨‡ç€¹ç‘°æ«’é–²å²€æ•¤ `root` ç¼‚æ ¬ç˜§é”›å±¼ç¯ƒæ¶“å¶„ç´°éå¶…æ´œæ¶“?`$HOME=/root` é‘°å±¾ç´¡å¦«â‚¬éŠ†?
+> ×¢Òâ£ºÕâÁ½Ì×¿âÄ¿Ç°ÔÚÈİÆ÷ÀïÊÇ´æÔÚµÄ£¬µ« **²»ÔÚ±¾²Ö¿âµÄ `third_party/` ÏÂ**¡£
+> µ±Ç°Ö÷Ïß´úÂëÒÑ¾­Í¬Ê±²¹ÉÏ£º
+> - ÏÔÊ½¾ø¶ÔÂ·¾¶ `/home/wheeltec/wheeltec_ros2/third_party/...`
+> - »·¾³±äÁ¿Â·¾¶ `$HOME/wheeltec_ros2/third_party/...`
+> ÕâÑù¼´Ê¹ÈİÆ÷ÀïÓÃ `root` ±àÒë£¬Ò²²»»áÔÙÒòÎª `$HOME=/root` ¶øÂ©¼ì¡£
 
-æ¿¡å‚æ¸¶é¦ã„¥çš¬æï¹€î†é£ã„¥å”´é„æƒ§ç´¡é¸å›§ç•¾æ¸šæ¿Šç¦†ç’ºîˆšç·é”›å±½ç¼“ç’î†¼å›éµÑ†î”‘é”›?
+ÈçĞèÔÚĞ¡³µÈİÆ÷ÄÚÏÔÊ½Ö¸¶¨ÒÀÀµÂ·¾¶£¬½¨ÒéÏÈÖ´ĞĞ£º
 
 ```bash
 export ONNXRUNTIME_ROOT=/home/wheeltec/wheeltec_ros2/third_party/onnxruntime-linux-aarch64-1.24.3
@@ -166,12 +167,12 @@ export LD_LIBRARY_PATH=$ONNXRUNTIME_ROOT/lib:$LIBGPIOD_ROOT/lib:$LD_LIBRARY_PATH
 export PKG_CONFIG_PATH=$ONNXRUNTIME_ROOT/lib/pkgconfig:$PKG_CONFIG_PATH
 ```
 
-### éšîˆšå§©ç€¹å±¾æš£ bringup
+### Æô¶¯ÍêÕû bringup
 ```bash
 ros2 launch smart_follower_bringup smart_follower.launch.py
 ```
 
-### å¨Œâ„ƒæ¹æ´æ› æ´æ¤¹åå§©é–å‘®æ¤‚é”›å±¼ç²éšîˆšå§©éˆî„„ã€é©î‡€æ‘¼ç’º?
+### Ã»ÓĞµ×ÅÌÇı¶¯°üÊ±£¬½öÆô¶¯±¾ÏîÄ¿Á´Â·
 ```bash
 ros2 launch smart_follower_bringup smart_follower.launch.py \
   robot_ns:=robot1 \
@@ -180,9 +181,9 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 
 ---
 
-## 6. è¤°æ’³å¢ éŠç…ç·±æµ¼æ¨ºå›é—ƒå‘°î‡°é¨å‹¬æƒæµ ?
+## 6. µ±Ç°ÖµµÃÓÅÏÈÔÄ¶ÁµÄÎÄ¼ş
 
-å¯¤é¸¿î†…éå ¢æ¹…é”›?
+½¨ÒéÏÈ¿´£º
 - `src/smart_follower_bringup/config/perception_params.yaml`
 - `src/smart_follower_control/config/control_params.yaml`
 - `src/smart_follower_perception/src/perception_node.cpp`
@@ -192,23 +193,20 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 - `src/smart_follower_control/src/obstacle_runtime.cpp`
 - `try.md`
 
-éæœµè…‘é”›?
-- `try.md`é”›æ°¬å¼¬éé¢ç¶”é¢?/ é—æ›šç¶… / ç’‹å†¨å¼¬å¯¤é¸¿î†…
+ÆäÖĞ£º
+- `try.md`£º²ÎÊı×÷ÓÃ / µ¥Î» / µ÷²Î½¨Òé
 
 ---
 
-## 7. è¤°æ’³å¢ é˜èˆµâ‚¬?
+## 7. µ±Ç°×´Ì¬
 
-è¤°æ’³å¢ æ¶“è¤åšå®¸èŒ¬ç²¡ç€¹å±¾åšéªå •ç™ç’‡ä½½ç¹ƒé”›?
+µ±Ç°Ö÷ÏßÒÑ¾­Íê³É²¢ÑéÖ¤¹ı£º
 - `smart_follower_msgs`
 - `smart_follower_perception`
 - `smart_follower_control`
 - `smart_follower_bringup`
 
-éšåº£ç”»å®¸ãƒ¤ç¶”é–²å¶‡å£çå—šæµ†éšæˆ¯ç´°
-- ç’ºîˆœåšé€èˆµæšƒå¨“å‘¯æ‚Š
-- é™å‚›æšŸéå¯¸æ‚Š
-- ç€¹ç‚¶æº…ç’‹å†¨å¼¬æ¶“åº£Ç”ç€¹æ°­â‚¬Ñ‡ç™ç’‡?
-
-
-
+ºóĞø¹¤×÷ÖØµã½«×ªÏò£º
+- Â·ÏßÊÕÁ²ÇåÀí
+- ²ÎÊıÕûÀí
+- Êµ³µµ÷²ÎÓëÎÈ¶¨ĞÔÑéÖ¤
