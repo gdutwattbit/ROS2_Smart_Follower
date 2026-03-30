@@ -90,6 +90,8 @@ void PerceptionDiagnostics::reset()
   raw_depth_count = 0;
   queued_color_count = 0;
   skipped_synced_frame_count = 0;
+  dropped_pending_work_count = 0;
+  dropped_ready_result_count = 0;
   person_pose_publish_count = 0;
   last_detection_count = 0;
   position_valid_count = 0;
@@ -148,6 +150,8 @@ void PerceptionDiagnostics::fill_status(
   stat.add("raw_depth_count", static_cast<int>(raw_depth_count));
   stat.add("queued_color_count", static_cast<int>(queued_color_count));
   stat.add("skipped_color_frame_count", static_cast<int>(skipped_synced_frame_count));
+  stat.add("dropped_pending_work_count", static_cast<int>(dropped_pending_work_count));
+  stat.add("dropped_ready_result_count", static_cast<int>(dropped_ready_result_count));
   stat.add("processed_frame_count", processed_frame_counter);
   stat.add("person_pose_publish_count", static_cast<int>(person_pose_publish_count));
   stat.add("last_infer_ms", last_infer_ms);
@@ -262,3 +266,4 @@ void PerceptionDiagnostics::fill_status(
 }
 
 }  // namespace smart_follower_perception
+

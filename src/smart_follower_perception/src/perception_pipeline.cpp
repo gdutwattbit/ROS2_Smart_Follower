@@ -117,7 +117,11 @@ bool PerceptionPipeline::enqueue_synchronized_frame(const SynchronizedFrame & sy
   DetectionWorkItem item;
   item.frame = synced_frame;
   item.run_detect = run_detect;
-  pending_work_ = std::move(item);
+  if (pending_work_queue_.size() >= max_pending_work_items_) {
+    pending_work_queue_.pop_front();
+    stats_.dropped_pending_work_count += 1;
+  }
+  pending_work_queue_.push_back(std::move(item));
   worker_cv_.notify_one();
   return true;
 }
@@ -130,7 +134,7 @@ void PerceptionPipeline::start_detection_worker()
   }
 
   worker_running_ = true;
-  pending_work_.reset();
+  pending_work_queue_.clear();
   detection_worker_ = std::thread(&PerceptionPipeline::detection_worker_loop, this);
 }
 
@@ -139,10 +143,10 @@ void PerceptionPipeline::stop_detection_worker()
   {
     std::lock_guard<std::mutex> worker_lock(worker_mutex_);
     if (!worker_running_ && !detection_worker_.joinable()) {
-      pending_work_.reset();
+      pending_work_queue_.clear();
     } else {
       worker_running_ = false;
-      pending_work_.reset();
+      pending_work_queue_.clear();
     }
   }
   worker_cv_.notify_all();
@@ -155,11 +159,11 @@ void PerceptionPipeline::clear_async_state()
 {
   {
     std::lock_guard<std::mutex> worker_lock(worker_mutex_);
-    pending_work_.reset();
+    pending_work_queue_.clear();
   }
   {
     std::lock_guard<std::mutex> result_lock(result_mutex_);
-    latest_result_.reset();
+    ready_result_queue_.clear();
   }
   scheduled_frame_counter_ = 0;
 }
@@ -172,11 +176,11 @@ bool PerceptionPipeline::consume_ready_result(
   std::optional<DetectionWorkResult> result;
   {
     std::lock_guard<std::mutex> result_lock(result_mutex_);
-    if (!latest_result_.has_value()) {
+    if (ready_result_queue_.empty()) {
       return false;
     }
-    result = std::move(latest_result_);
-    latest_result_.reset();
+    result = std::move(ready_result_queue_.front());
+    ready_result_queue_.pop_front();
   }
 
   process_detection_result(std::move(*result), person_pub, now_fn, diagnostics_force_update);
@@ -190,15 +194,15 @@ void PerceptionPipeline::detection_worker_loop()
     {
       std::unique_lock<std::mutex> worker_lock(worker_mutex_);
       worker_cv_.wait(worker_lock, [this]() {
-        return !worker_running_ || pending_work_.has_value();
+        return !worker_running_ || !pending_work_queue_.empty();
       });
 
-      if (!worker_running_ && !pending_work_.has_value()) {
+      if (!worker_running_ && pending_work_queue_.empty()) {
         break;
       }
 
-      item = std::move(*pending_work_);
-      pending_work_.reset();
+      item = std::move(pending_work_queue_.front());
+      pending_work_queue_.pop_front();
     }
 
     DetectionWorkResult result;
@@ -214,7 +218,11 @@ void PerceptionPipeline::detection_worker_loop()
     }
 
     std::lock_guard<std::mutex> result_lock(result_mutex_);
-    latest_result_ = std::move(result);
+    if (ready_result_queue_.size() >= max_ready_result_items_) {
+      ready_result_queue_.pop_front();
+      stats_.dropped_ready_result_count += 1;
+    }
+    ready_result_queue_.push_back(std::move(result));
   }
 }
 
@@ -500,3 +508,4 @@ void PerceptionPipeline::process_detection_result(
 }
 
 }  // namespace smart_follower_perception
+

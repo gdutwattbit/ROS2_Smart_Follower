@@ -388,10 +388,12 @@ private:
       return;
     }
 
-    pipeline_.consume_ready_result(
+    while (pipeline_.consume_ready_result(
       person_pub_,
       [this]() { return this->now(); },
-      [this]() { diagnostics_.force_update(); });
+      [this]() { diagnostics_.force_update(); }))
+    {
+    }
   }
 
   void diagnostics_callback(diagnostic_updater::DiagnosticStatusWrapper & stat)
@@ -609,3 +611,4 @@ int main(int argc, char ** argv)
   rclcpp::shutdown();
   return 0;
 }
+

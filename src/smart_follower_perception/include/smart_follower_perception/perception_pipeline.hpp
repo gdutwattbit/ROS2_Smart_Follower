@@ -1,6 +1,7 @@
 #pragma once
 
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -70,11 +71,14 @@ private:
   std::condition_variable worker_cv_;
   std::thread detection_worker_;
   bool worker_running_{false};
-  std::optional<DetectionWorkItem> pending_work_;
+  std::deque<DetectionWorkItem> pending_work_queue_;
+  std::size_t max_pending_work_items_{4};
 
   std::mutex result_mutex_;
-  std::optional<DetectionWorkResult> latest_result_;
+  std::deque<DetectionWorkResult> ready_result_queue_;
+  std::size_t max_ready_result_items_{8};
   int scheduled_frame_counter_{0};
 };
 
 }  // namespace smart_follower_perception
+

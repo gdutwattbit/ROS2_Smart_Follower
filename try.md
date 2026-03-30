@@ -1,368 +1,269 @@
-# Smart Follower 调参说明（try.md）
+﻿# Smart Follower 现场调参与排查速查
 
-本文只面向 **beta-0.3.1 当前固定技术路线**：
-- Astra `color + depth`
-- `/camera/get_camera_info` 真实内参
-- YOLO + ReID + Tracker + Lock Manager
-- `depth_compare` 主定位
-- follower / obstacle / arbiter 控制链
+本文面向当前工作区的控制链路，重点记录 `follower_controller_node` 的调参与现场命令。
 
-当前权威来源：
-- `src/smart_follower_bringup/config/perception_params.yaml`
-- `src/smart_follower_control/config/control_params.yaml`
-- `src/smart_follower_bringup/launch/smart_follower.launch.py`
+当前默认命名空间：`/robot1`
+当前控制参数文件：`src/smart_follower_control/config/control_params.yaml`
 
-> 说明
-> - 默认命名空间：`robot1`
-> - launch 会覆盖模型路径，因此运行时最终模型以 launch 为准
-> - 角度带 `deg` 为度，带 `rad` 为弧度，时间带 `s/sec` 为秒，距离默认单位为米
-> - 本文不再描述旧纯 RGB / 单目 fallback 路线
+## 1. 当前控制参数
 
----
+当前常用控制参数如下：
 
-## 1. 当前默认运行组合
-
-### 1.1 模型
-- YOLO：`models/yolo26n_static_256x320_simplify_e2e_int8.onnx`
-- ReID：`models/osnet_x0_5_512.onnx`
-
-### 1.2 输入与节奏
-- color：`/camera/color/image_raw`
-- depth：`/camera/depth/image_raw`
-- camera info service：`/camera/get_camera_info`
-- 相机典型输入：`640x480 @ 30fps`
-- 感知处理：`process_every_n_frames=2`，当前更适合先逼近输入上限
-- follower 控制：`20Hz`
-- 超声波：`10Hz`
-- 避障 / 仲裁：`20Hz`
-
-### 1.3 当前推荐线程
 ```yaml
-yolo:
-  ort:
-    intra_op_num_threads: 1
-    inter_op_num_threads: 1
-    execution_mode: sequential
-
-reid:
-  ort:
-    intra_op_num_threads: 1
-    inter_op_num_threads: 1
-    execution_mode: sequential
+/robot1/follower_controller_node:
+  ros__parameters:
+    control_rate: 20.0
+    target_distance: 0.6
+    steering_kalman:
+      process_noise: 10.0
+      measurement_noise: 0.1
+      initial_covariance: 2.0
+    target_timeout: 1.2
+    prediction_horizon_s: 0.25
+    velocity_ema_alpha: 0.70
+    pid_r:
+      kp: 5.0
+      ki: 1.0
+      kd: 2.0
+    pid_t:
+      kp: 1.5
+      ki: 0.5
+      kd: 0.5
+    pid_i_limit: 1.0
+    pid_kaw: 0.2
+    limits:
+      v_max: 0.6
+      w_max: 1.2
+      dv_max: 0.5
+      dw_max: 1.5
 ```
 
----
+## 2. 参数含义
 
-## 2. launch 层说明
+### 2.1 跟随几何与预测
 
-### 2.1 当前唯一正式入口：`smart_follower.launch.py`
-路径：`src/smart_follower_bringup/launch/smart_follower.launch.py`
+- `target_distance`
+  期望跟随距离，单位米。
+- `target_timeout`
+  目标超时阈值。超过这个时间没有拿到有效目标，控制器会清零输出。
+- `prediction_horizon_s`
+  目标预测的最大时间窗。
+- `velocity_ema_alpha`
+  目标速度估计的 EMA 平滑系数。越大越稳，越小越灵。
 
-作用：
-- 可拉起底盘相关节点
-- 可拉起 Astra 相机
-- 再拉起 perception + control 全链路
+### 2.2 转向卡尔曼滤波
 
-关键 launch 参数：
+- `steering_kalman.process_noise`
+  越大越灵，越小越稳。
+- `steering_kalman.measurement_noise`
+  越大越不信当前观测，越平滑。
+- `steering_kalman.initial_covariance`
+  刚锁定或刚复位时，对当前观测的贴合速度。
 
-| 参数 | 默认值 | 作用 |
-|---|---:|---|
-| `robot_ns` | `robot1` | 机器人命名空间 |
-| `bringup_robot` | `true` | 是否拉起车体底层 |
-| `bringup_camera` | `true` | 是否拉起相机驱动 |
-| `camera_color_qos` | `sensor_data` | color 话题 QoS |
-| `camera_enable_depth` | `true` | 是否打开 depth |
-| `camera_enable_point_cloud` | `false` | 是否打开点云 |
-| `camera_depth_registration` | `true` | 是否打开 depth registration |
-| `camera_enable_d2c_viewer` | `false` | 是否打开 d2c viewer |
-| `camera_enable_ir` | `false` | 是否打开 IR |
+### 2.3 PID
 
-常用命令：
+- `pid_r.kp / ki / kd`
+  控制前后距离。
+- `pid_t.kp / ki / kd`
+  控制左右转向。
+- `pid_i_limit`
+  积分限幅。
+- `pid_kaw`
+  anti-windup 系数，用来抑制积分在饱和时越积越多。
+
+### 2.4 输出限制
+
+- `limits.v_max`
+  线速度上限。
+- `limits.w_max`
+  角速度上限。
+- `limits.dv_max`
+  线速度变化率上限。
+- `limits.dw_max`
+  角速度变化率上限。
+
+## 3. 目前已经删掉的旧限制
+
+为了让控制更直接，当前控制链已经删除以下额外限制：
+
+- `theta_deadzone`
+- 大转角时的自动降速逻辑 `abs(theta) > 0.5 -> v *= 0.3`
+- `max_target_speed_mps` 对目标速度估计的硬截断
+
+因此现在真正保留的“硬限制”主要就是：
+
+- `limits.v_max`
+- `limits.w_max`
+- `limits.dv_max`
+- `limits.dw_max`
+- `target_timeout`
+
+## 4. 现场调参顺序
+
+建议按下面顺序调，不要一上来同时改很多项。
+
+### 4.1 直线太慢、太肉
+
+先调：
+
+1. `pid_r.kp`
+2. `pid_r.ki`
+3. `limits.v_max`
+4. `limits.dv_max`
+
+经验：
+
+- 想让车更愿意往前追：先加 `pid_r.kp`
+- 想让车长时间误差能顶上去：再加 `pid_r.ki`
+- 想让车起步更猛：加 `limits.dv_max`
+- 想让车最高速度更快：加 `limits.v_max`
+
+### 4.2 转弯正常但前轮抽搐
+
+先调：
+
+1. `steering_kalman.measurement_noise`
+2. `limits.dw_max`
+3. `pid_t.kd`
+4. `steering_kalman.process_noise`
+
+经验：
+
+- 先增大 `measurement_noise` 抑制抖动
+- 再减小 `dw_max` 限制角速度变化率
+- 如仍有高频摆动，再补一点 `pid_t.kd`
+- 若变得太钝，再适度提高 `process_noise`
+
+### 4.3 反应太慢但不抖
+
+先调：
+
+1. `steering_kalman.process_noise`
+2. `steering_kalman.measurement_noise`
+3. `pid_t.kp`
+4. `limits.dw_max`
+
+经验：
+
+- 提高 `process_noise`
+- 或降低 `measurement_noise`
+- 再看 `pid_t.kp` 是否偏小
+- 最后确认是不是 `dw_max` 压得太死
+
+### 4.4 走一下停一下
+
+优先排查：
+
+1. `person_pose` 是否持续更新
+2. 是否频繁出现 `target_timeout`
+3. 感知侧是否有 `depth_window_no_valid_samples`
+4. `target_timeout` 是否过小
+
+这个问题通常不是 PID 本身造成的，而是上游目标无效或超时。
+
+## 5. 常用调参命令
+
+以下命令默认你已经 `source install/setup.bash`，并且节点运行在 `robot1` 命名空间。
+
+### 5.1 查看参数
 
 ```bash
-# 完整 bringup
-ros2 launch smart_follower_bringup smart_follower.launch.py
-
-# 没有底盘包时，只起本项目链路
-ros2 launch smart_follower_bringup smart_follower.launch.py \
-  robot_ns:=robot1 \
-  bringup_robot:=false
-
-# 没有相机时，只起本项目链路并自行注入测试数据
-ros2 launch smart_follower_bringup smart_follower.launch.py \
-  robot_ns:=robot1 \
-  bringup_robot:=false \
-  bringup_camera:=false
+ros2 param list /robot1/follower_controller_node
+ros2 param get /robot1/follower_controller_node target_distance
+ros2 param get /robot1/follower_controller_node pid_r.kp
+ros2 param get /robot1/follower_controller_node pid_t.kp
+ros2 param get /robot1/follower_controller_node steering_kalman.process_noise
+ros2 param get /robot1/follower_controller_node limits.v_max
 ```
 
----
+### 5.2 在线修改参数
 
-## 3. perception_params.yaml 详解
+```bash
+ros2 param set /robot1/follower_controller_node target_distance 0.7
+ros2 param set /robot1/follower_controller_node pid_r.kp 6.0
+ros2 param set /robot1/follower_controller_node pid_r.ki 1.2
+ros2 param set /robot1/follower_controller_node pid_t.kp 1.8
+ros2 param set /robot1/follower_controller_node pid_t.kd 0.8
+ros2 param set /robot1/follower_controller_node pid_i_limit 1.2
+ros2 param set /robot1/follower_controller_node pid_kaw 0.3
+ros2 param set /robot1/follower_controller_node steering_kalman.process_noise 12.0
+ros2 param set /robot1/follower_controller_node steering_kalman.measurement_noise 0.15
+ros2 param set /robot1/follower_controller_node steering_kalman.initial_covariance 2.5
+ros2 param set /robot1/follower_controller_node limits.v_max 0.8
+ros2 param set /robot1/follower_controller_node limits.w_max 1.5
+ros2 param set /robot1/follower_controller_node limits.dv_max 0.8
+ros2 param set /robot1/follower_controller_node limits.dw_max 1.0
+ros2 param set /robot1/follower_controller_node target_timeout 1.5
+ros2 param set /robot1/follower_controller_node prediction_horizon_s 0.30
+```
 
-路径：`src/smart_follower_bringup/config/perception_params.yaml`
+### 5.3 一组常用试调命令
 
-### 3.1 话题与坐标系
+偏灵敏：
 
-| 参数 | 默认值 | 作用 | 建议 |
-|---|---|---|---|
-| `color_topic` | `/camera/color/image_raw` | 彩色输入话题 | 相机话题变化时改这里 |
-| `depth_topic` | `/camera/depth/image_raw` | 深度输入话题 | 需与实际 Astra 输出一致 |
-| `person_pose_topic` | `person_pose` | 感知输出人物列表 | 控制侧默认消费它，通常别改 |
-| `follow_command_topic` | `follow_command` | 锁定/解锁命令话题 | 一般不改 |
-| `base_frame` | `base_footprint` | 输出坐标系 | 只有底盘主坐标系不同才改 |
+```bash
+ros2 param set /robot1/follower_controller_node pid_r.kp 6.0
+ros2 param set /robot1/follower_controller_node pid_t.kp 1.8
+ros2 param set /robot1/follower_controller_node steering_kalman.process_noise 14.0
+ros2 param set /robot1/follower_controller_node steering_kalman.measurement_noise 0.08
+ros2 param set /robot1/follower_controller_node limits.dv_max 0.8
+ros2 param set /robot1/follower_controller_node limits.dw_max 1.8
+```
 
-### 3.2 YOLO 参数
+偏平滑：
 
-| 参数 | 默认值 | 作用 | 调参建议 |
-|---|---:|---|---|
-| `yolo.model_path` | `models/yolo26n_static_256x320_simplify_e2e_int8.onnx` | YOLO ONNX 路径 | 通常由 launch 覆盖 |
-| `yolo.input_w` | `320` | YOLO 输入宽 | 必须与模型匹配 |
-| `yolo.input_h` | `256` | YOLO 输入高 | 必须与模型匹配 |
-| `yolo.person_class_id` | `0` | person 类别 id | COCO 一般就是 0 |
-| `yolo.conf_threshold` | `0.25` | 检测阈值 | 漏检多就降，误检多就升 |
-| `yolo.ort.intra_op_num_threads` | `1` | 算子内线程数 | 当前推荐值 |
-| `yolo.ort.inter_op_num_threads` | `1` | 算子间线程数 | 通常保持 1 |
-| `yolo.ort.execution_mode` | `sequential` | ORT 执行模式 | 当前推荐值 |
+```bash
+ros2 param set /robot1/follower_controller_node pid_t.kd 0.8
+ros2 param set /robot1/follower_controller_node steering_kalman.process_noise 6.0
+ros2 param set /robot1/follower_controller_node steering_kalman.measurement_noise 0.18
+ros2 param set /robot1/follower_controller_node limits.dv_max 0.4
+ros2 param set /robot1/follower_controller_node limits.dw_max 0.8
+```
 
-### 3.3 ReID 参数
+### 5.4 保存到 yaml
 
-| 参数 | 默认值 | 作用 | 调参建议 |
-|---|---:|---|---|
-| `reid.model_path` | `models/osnet_x0_5_512.onnx` | ReID ONNX 路径 | 通常由 launch 覆盖 |
-| `reid.input_w` | `128` | ReID 输入宽 | 与模型匹配 |
-| `reid.input_h` | `256` | ReID 输入高 | 与模型匹配 |
-| `reid.ema_alpha` | `0.2` | 特征 EMA 平滑系数 | 越大越稳 |
-| `reid.recover_threshold` | `0.70` | 记忆库恢复阈值 | 错认多就升，恢复难就降 |
-| `reid.ort.intra_op_num_threads` | `1` | 线程数 | 轻量模型通常 1 即可 |
-| `reid.ort.inter_op_num_threads` | `1` | 线程数 | 一般不动 |
-| `reid.ort.execution_mode` | `sequential` | ORT 模式 | 一般不动 |
+在线调参满意后，记得把最终值回写到：
 
-### 3.4 感知节奏 / 跟踪基础参数
+`src/smart_follower_control/config/control_params.yaml`
 
-| 参数 | 默认值 | 作用 | 调参建议 |
-|---|---:|---|---|
-| `process_every_n_frames` | `2` | 每 N 帧处理 1 帧 | 当前小车彩色输入约 13Hz 时，更容易把 `person_pose` 拉回到约 6~7Hz 区间 |
-| `detect_every_n_frames` | `1` | 每处理 N 帧做 1 次检测 | 当前保持每次处理都检测 |
-| `min_confirm_hits` | `3` | 轨迹确认最少命中数 | 升大更稳但起锁更慢 |
-| `max_miss_frames` | `10` | 轨迹最大丢失帧数 | 升大更抗漏检 |
-| `feature_buffer_size` | `20` | 特征历史长度 | 常见 10~30 |
-| `sync_cache_size` | `6` | color/depth 同步缓存大小 | 深度同步不稳时可适当增大 |
-| `sync_slop` | `0.04` | 同步容忍时间差 | 同步不稳定时先小幅加到 0.05~0.06 |
-| `memory_sec` | `30.0` | 记忆库保留时间 | 复杂遮挡场景可适当加大 |
+否则下次重启会恢复旧值。
 
-### 3.5 tracking 代价参数
+## 6. 常用观测命令
 
-| 参数 | 默认值 | 作用 | 调参建议 |
-|---|---:|---|---|
-| `tracking.low_score_threshold` | `0.1` | 低分框阈值 | 太低会引入噪声 |
-| `tracking.high_score_threshold` | `0.5` | 高分框阈值 | 越高越保守 |
-| `tracking.assignment_threshold` | `0.7` | 主匹配阈值 | 串人多就降，断轨多就升一点 |
-| `tracking.second_stage_threshold` | `0.8` | 二阶段阈值 | 通常略高于主阈值 |
-| `tracking.weights.iou` | `0.3` | IOU 权重 | 框稳定时可略增 |
-| `tracking.weights.center` | `0.2` | 中心点权重 | 抖动大时别太高 |
-| `tracking.weights.appearance` | `0.4` | 外观权重 | ReID 稳时可适当加大 |
+### 6.1 看 person_pose 是否稳定
 
-### 3.6 相机与 depth_compare 参数
+```bash
+ros2 topic hz /robot1/person_pose
+ros2 topic echo /robot1/person_pose --once
+```
 
-> 当前这组参数已经不再是“单目定位参数”，而是 **相机服务 + 安装偏移 + depth 采样** 参数。
+### 6.2 看控制输出是否连续
 
-| 参数 | 默认值 | 作用 | 调参建议 |
-|---|---:|---|---|
-| `camera.info_service` | `/camera/get_camera_info` | 请求真实相机内参的服务名 | 必须可用 |
-| `camera.x_offset_m` | `0.175` | 相机相对 `base_footprint` 的前后偏移 | 相机在 base 前方为正 |
-| `camera.y_offset_m` | `0.01` | 相机相对 `base_footprint` 的左右偏移 | 相机在车体左侧为正 |
-| `depth_compare.min_range_m` | `0.20` | depth 有效最小距离 | 太小会引入近距噪声 |
-| `depth_compare.max_range_m` | `4.00` | depth 有效最大距离 | 室内跟随常用 3~4 米 |
-| `depth_compare.sample_window_px` | `5` | 采样窗口边长 | 越大越稳，但更易吃到背景 |
-| `depth_compare.min_valid_samples` | `3` | 最少有效深度样本数 | 太小会更冒进，太大容易丢目标 |
+```bash
+ros2 topic hz /robot1/cmd_vel_follow
+ros2 topic echo /robot1/cmd_vel_follow
+```
 
-#### 安装偏移正负号
-按 ROS 常见底盘坐标：
-- `x` 朝前
-- `y` 朝左
-- `z` 朝上
+### 6.3 看最终底盘速度
 
-因此：
-- `x_offset_m > 0`：相机在 base 原点前方
-- `y_offset_m > 0`：相机在车体左侧
+```bash
+ros2 topic echo /cmd_vel
+```
 
-你当前固化值表示：
-- 相机位于 base 原点前方 `17.5 cm`
-- 相机位于 base 原点左侧 `1 cm`
+### 6.4 看节点参数是否真的生效
 
-#### depth_compare 调参顺序
-1. 先保证 `info_service` 可用，`intrinsics_ready=1`
-2. 再确认 `x_offset_m / y_offset_m`
-3. 如果距离抖动大，先调 `sample_window_px`
-4. 如果经常拿不到位置，先看 `min_valid_samples`
-5. 如果远处噪声多，再收紧 `max_range_m`
+```bash
+ros2 param dump /robot1/follower_controller_node
+```
 
-### 3.7 lock 参数
+## 7. 推荐的单次调参方法
 
-| 参数 | 默认值 | 作用 | 调参建议 |
-|---|---:|---|---|
-| `lock.stable_frames` | `5` | 连续稳定多少帧才正式锁定 | 升大更稳，降小更快 |
-| `lock.hold_sec` | `0.6` | 短时丢目标保持时间 | 短遮挡多可加一点 |
-| `lock.switch_sec` | `2.0` | 切换目标前保守时间 | 串人多就加大 |
-| `lock.center_roi_ratio` | `0.6` | 中心 ROI 比例 | 越小越偏向画面中心 |
-| `lock.target_area_ratio` | `0.04` | 面积筛选参考值 | 太小可能锁远处小人 |
+每次只改 1 到 2 个参数，跑一轮，记录现象。
 
----
+推荐节奏：
 
-## 4. control_params.yaml 详解
+1. 先只调 `pid_r`，把直线跟随速度调顺
+2. 再调 `pid_t + steering_kalman`，把转向手感调顺
+3. 最后用 `limits.dv_max / dw_max` 收口，让动作既跟手又不抽
 
-路径：`src/smart_follower_control/config/control_params.yaml`
-
-### 4.1 公共顶层参数
-
-| 参数 | 默认值 | 作用 |
-|---|---|---|
-| `person_pose_topic` | `person_pose` | 控制侧消费的人物位置话题 |
-| `follow_command_topic` | `follow_command` | 键盘/上层命令话题 |
-
-### 4.2 follower_controller_node
-
-| 参数 | 默认值 | 作用 | 调参建议 |
-|---|---:|---|---|
-| `cmd_vel_follow_topic` | `cmd_vel_follow` | 跟随控制输出 | 一般不改 |
-| `control_rate` | `20.0` | 跟随控制频率 | 当前推荐值 |
-| `target_distance` | `0.6` | 期望跟随距离 | 太近/太远就改它 |
-| `theta_deadzone` | `0.03` | 转向死区 | 太小会抖头 |
-| `target_timeout` | `0.3` | 目标超时失效时间 | 兼顾平顺与安全 |
-| `prediction_horizon_s` | `0.25` | 最远预测窗口 | 太大会飘 |
-| `velocity_ema_alpha` | `0.70` | 目标速度 EMA 系数 | 越大越稳 |
-| `max_target_speed_mps` | `1.50` | 目标估计速度上限 | 防止异常速度拉飞预测 |
-| `pid_r.kp/ki/kd` | `0.8/0.0/0.1` | 线速度 PID | 前后跟距主调这组 |
-| `pid_t.kp/ki/kd` | `1.2/0.0/0.1` | 转向 PID | 左右跟随主调这组 |
-| `pid_i_limit` | `0.5` | 积分限幅 | 防止积分饱和 |
-| `pid_kaw` | `0.2` | anti-windup 系数 | 一般少动 |
-| `limits.v_max` | `0.6` | 最大线速度 | 当前安全上限 |
-| `limits.w_max` | `1.2` | 最大角速度 | 太小转不过来 |
-| `limits.dv_max` | `0.5` | 线速度变化率限制 | 越小越平滑 |
-| `limits.dw_max` | `1.5` | 角速度变化率限制 | 越小越平滑 |
-
-#### 跟随手感优先调参顺序
-1. `target_distance`
-2. `pid_t.kp`, `pid_t.kd`
-3. `pid_r.kp`, `pid_r.kd`
-4. `limits.dv_max`, `limits.dw_max`
-5. `prediction_horizon_s`, `velocity_ema_alpha`
-
-### 4.3 obstacle_avoidance_node
-
-| 参数 | 默认值 | 作用 |
-|---|---:|---|
-| `left_range_topic` / `right_range_topic` | 左右超声波输入 | 左右 range 输入 |
-| `cmd_vel_input_topic` | `/cmd_vel` | 原始速度输入 |
-| `cmd_vel_avoid_topic` | `cmd_vel_avoid` | 避障输出 |
-| `rate` | `20.0` | 避障频率 |
-| `d_min` | `0.12` | 最小安全距离基线 |
-| `t_react` | `0.20` | 反应时间补偿 |
-| `a_brake` | `0.8` | 制动能力估计 |
-| `margin` | `0.08` | 进入避障裕量 |
-| `exit_margin` | `0.08` | 退出避障裕量 |
-| `turn_speed` | `0.5` | 常规避障转向速度 |
-| `slow_turn_speed` | `0.25` | 轻微避障转向速度 |
-| `back_speed` | `-0.15` | 必要时倒车速度 |
-
-### 4.4 arbiter_node
-
-| 参数 | 默认值 | 作用 |
-|---|---:|---|
-| `cmd_vel_follow_topic` | `cmd_vel_follow` | 跟随输入 |
-| `cmd_vel_avoid_topic` | `cmd_vel_avoid` | 避障输入 |
-| `cmd_vel_topic` | `/cmd_vel` | 最终输出 |
-| `publish_rate` | `20.0` | 输出频率 |
-| `lost_time_normal_max` | `0.2` | 正常态短时丢目标上限 |
-| `lost_time_degraded_max` | `0.6` | 降级态时长 |
-| `lost_time_search_max` | `2.0` | 搜索态最长时长 |
-| `degraded_linear_scale` | `0.5` | 降级态线速度缩放 |
-| `search_angular_speed` | `0.3` | 搜索态角速度 |
-| `avoid_enter_threshold` | `3` | 进入避障阈值 |
-| `avoid_exit_threshold` | `5` | 退出避障阈值 |
-| `avoid_exit_hysteresis_time` | `0.2` | 退出避障迟滞 |
-| `avoid_cmd_timeout` | `0.2` | 避障命令超时 |
-| `avoid_nonzero_epsilon` | `0.001` | 判定非零命令的阈值 |
-
-### 4.5 ultrasonic_range_node
-
-| 参数 | 默认值 | 作用 |
-|---|---:|---|
-| `rate` | `10.0` | 采样频率 |
-| `window_size` | `5` | 中值窗口大小 |
-| `min_range` | `0.03` | 最小有效距离 |
-| `max_range` | `3.0` | 最大有效距离 |
-| `left/right.trig_pin` | `23/4` 等 | GPIO 配置 |
-| `frame_left/frame_right` | `ultrasonic_left_link/right_link` | 超声波 frame |
-
-### 4.6 keyboard_command_node
-
-| 参数 | 默认值 | 作用 |
-|---|---|---|
-| `follow_command_topic` | `follow_command` | 命令输出话题 |
-| `key_lock` | `l` | 锁定 |
-| `key_unlock` | `u` | 解锁 |
-| `key_reset` | `r` | 重置 |
-| `key_estop` | `q` | 急停 |
-
----
-
-## 5. 实车推荐调参顺序
-
-### 第一阶段：先保证链路正确
-1. `intrinsics_ready=1`
-2. `info_service` 正常返回真实内参
-3. `/camera/color/image_raw` 与 `/camera/depth/image_raw` 都稳定输入
-4. `/robot1/person_pose` 持续输出
-
-### 第二阶段：先把“能跟”调出来
-1. `x_offset_m`
-2. `y_offset_m`
-3. `target_distance`
-4. `pid_t.kp / kd`
-5. `pid_r.kp / kd`
-
-### 第三阶段：把“跟得稳”调出来
-1. `limits.dv_max`, `limits.dw_max`
-2. `velocity_ema_alpha`
-3. `prediction_horizon_s`
-4. `lock.stable_frames`, `lock.hold_sec`
-
-### 第四阶段：把“复杂场景不串人”调出来
-1. `reid.recover_threshold`
-2. `tracking.weights.appearance`
-3. `tracking.assignment_threshold`
-4. `lock.switch_sec`
-
-### 第五阶段：把“安全避障”调出来
-1. `d_min`
-2. `margin`
-3. `turn_speed`
-4. `back_speed`
-
----
-
-## 6. 最值得记录的实车参数
-
-建议单独记录这几项：
-- `camera.x_offset_m`
-- `camera.y_offset_m`
-- `depth_compare.sample_window_px`
-- `depth_compare.min_valid_samples`
-- `target_distance`
-- `pid_r.kp`, `pid_r.kd`
-- `pid_t.kp`, `pid_t.kd`
-- `prediction_horizon_s`
-- `velocity_ema_alpha`
-- `d_min`, `margin`
-
----
-
-## 7. 一句话版建议
-
-如果你现在就要开始调：
-1. **先确认内参服务和 depth_compare 正常**
-2. **再调 target_distance 和跟随 PID**
-3. **最后再修预测、锁定和避障**
-
-不要再按旧单目路线去调 `camera_height_m / camera_pitch_deg` 这类已删除参数；当前主线里它们已经不参与实际运行。
+如果出现“明显停住”，优先查 `person_pose` 和超时，不要先怪 PID。

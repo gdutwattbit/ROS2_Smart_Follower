@@ -59,9 +59,7 @@ smart_follower_control::FollowerRuntimeConfig make_test_config()
   config.target_timeout = 0.3;
   config.prediction_horizon_s = 0.25;
   config.velocity_ema_alpha = 0.0;
-  config.max_target_speed_mps = 10.0;
   config.target_distance = 0.0;
-  config.theta_deadzone = 0.0;
   config.kp_r = 1.0;
   config.ki_r = 0.0;
   config.kd_r = 0.0;
@@ -201,3 +199,4 @@ TEST(FollowerRuntime, KeepsLastValidTargetAcrossShortNanGap)
   EXPECT_TRUE(snapshot.predicted_target_valid);
   EXPECT_NEAR(snapshot.target_vx, 2.0, 1e-6);
 }
+

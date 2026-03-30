@@ -10,7 +10,7 @@ void FollowerRuntime::set_config(const FollowerRuntimeConfig & config)
 {
   config_ = config;
   configure_controllers();
-  clamp_target_speed(last_target_, config_.max_target_speed_mps);
+  reset_steering_filter();
 }
 
 void FollowerRuntime::clear()
@@ -31,6 +31,9 @@ void FollowerRuntime::reset_output()
   pid_r_.reset();
   pid_t_.reset();
   last_cmd_ = geometry_msgs::msg::Twist();
+  last_raw_theta_ = 0.0;
+  last_filtered_theta_ = 0.0;
+  reset_steering_filter();
 }
 
 namespace
@@ -40,15 +43,25 @@ void note_invalid_target(std::string & reason_slot, std::size_t & counter, const
   reason_slot = reason;
   ++counter;
 }
+
+double normalize_angle(double angle)
+{
+  return std::atan2(std::sin(angle), std::cos(angle));
 }
+}  // namespace
 
 void FollowerRuntime::on_pose(const smart_follower_msgs::msg::PersonPoseArray & msg)
 {
+  const int previous_lock_id = last_pose_lock_id_;
   last_pose_lock_id_ = msg.lock_id;
   last_pose_lock_state_ = static_cast<int>(msg.lock_state);
   last_pose_locked_track_found_ = false;
   last_pose_locked_track_confirmed_ = false;
   last_pose_locked_track_finite_ = false;
+
+  if (msg.lock_id != previous_lock_id) {
+    reset_steering_filter();
+  }
 
   if (msg.lock_id < 0) {
     last_target_.valid = false;
@@ -98,7 +111,6 @@ void FollowerRuntime::on_pose(const smart_follower_msgs::msg::PersonPoseArray & 
       }
     }
 
-    clamp_target_speed(next_target, config_.max_target_speed_mps);
     last_target_ = next_target;
     last_invalid_reason_.clear();
     updated = true;
@@ -116,9 +128,7 @@ void FollowerRuntime::on_pose(const smart_follower_msgs::msg::PersonPoseArray & 
       note_invalid_target(last_invalid_reason_, invalid_target_event_count_, "locked_track_not_updated");
     }
 
-    if (last_target_.valid) {
-      clamp_target_speed(last_target_, config_.max_target_speed_mps);
-    } else {
+    if (!last_target_.valid) {
       last_target_.vx = 0.0;
       last_target_.vy = 0.0;
     }
@@ -135,10 +145,10 @@ geometry_msgs::msg::Twist FollowerRuntime::compute_command(const rclcpp::Time & 
 
   const auto & target = target_opt.value();
   const double rho = std::sqrt(target.x * target.x + target.y * target.y);
-  double theta = std::atan2(target.y, target.x);
-  if (std::abs(theta) < config_.theta_deadzone) {
-    theta = 0.0;
-  }
+  last_raw_theta_ = std::atan2(target.y, target.x);
+
+  const double theta = filter_theta_measurement(last_raw_theta_, now_time);
+  last_filtered_theta_ = theta;
 
   const double dt = 1.0 / std::max(1.0, config_.control_rate);
   const double e_r = rho - config_.target_distance;
@@ -146,10 +156,6 @@ geometry_msgs::msg::Twist FollowerRuntime::compute_command(const rclcpp::Time & 
 
   double v = pid_r_.update(e_r, dt, -config_.v_max, config_.v_max);
   double w = pid_t_.update(e_t, dt, -config_.w_max, config_.w_max);
-
-  if (std::abs(theta) > 0.5) {
-    v *= 0.3;
-  }
 
   v = rate_limit(v, last_cmd_.linear.x, config_.dv_max, dt);
   w = rate_limit(w, last_cmd_.angular.z, config_.dw_max, dt);
@@ -168,6 +174,9 @@ FollowerRuntimeSnapshot FollowerRuntime::snapshot(const rclcpp::Time & now_time)
   out.target_vx = last_target_.vx;
   out.target_vy = last_target_.vy;
   out.target_speed_mps = std::hypot(last_target_.vx, last_target_.vy);
+  out.steering_filter_ready = steering_filter_.initialized;
+  out.raw_theta = last_raw_theta_;
+  out.filtered_theta = last_filtered_theta_;
   out.last_pose_lock_id = last_pose_lock_id_;
   out.last_pose_lock_state = last_pose_lock_state_;
   out.locked_track_found = last_pose_locked_track_found_;
@@ -222,16 +231,78 @@ double FollowerRuntime::rate_limit(double target, double current, double accel_l
   return std::clamp(target, current - delta_max, current + delta_max);
 }
 
-void FollowerRuntime::clamp_target_speed(TargetState & target, double max_speed_mps)
+void FollowerRuntime::reset_steering_filter()
 {
-  const double speed = std::hypot(target.vx, target.vy);
-  if (max_speed_mps <= 0.0 || speed <= max_speed_mps || speed <= 1e-9) {
-    return;
+  const double initial_covariance = std::max(1e-6, config_.steering_kalman_initial_covariance);
+  steering_filter_ = SteeringKalmanState();
+  steering_filter_.p00 = initial_covariance;
+  steering_filter_.p11 = initial_covariance;
+}
+
+double FollowerRuntime::filter_theta_measurement(double theta, const rclcpp::Time & stamp)
+{
+  const double initial_covariance = std::max(1e-6, config_.steering_kalman_initial_covariance);
+  if (!steering_filter_.initialized) {
+    steering_filter_.initialized = true;
+    steering_filter_.theta = theta;
+    steering_filter_.theta_rate = 0.0;
+    steering_filter_.p00 = initial_covariance;
+    steering_filter_.p01 = 0.0;
+    steering_filter_.p10 = 0.0;
+    steering_filter_.p11 = initial_covariance;
+    steering_filter_.stamp = stamp;
+    return theta;
   }
 
-  const double scale = max_speed_mps / speed;
-  target.vx *= scale;
-  target.vy *= scale;
+  double dt = (stamp - steering_filter_.stamp).seconds();
+  if (!std::isfinite(dt) || dt <= 1e-3) {
+    dt = 1.0 / std::max(1.0, config_.control_rate);
+  }
+  dt = std::clamp(dt, 1e-3, 0.25);
+
+  const double process_noise = std::max(1e-6, config_.steering_kalman_process_noise);
+  const double measurement_noise = std::max(1e-6, config_.steering_kalman_measurement_noise);
+  const double dt2 = dt * dt;
+  const double dt3 = dt2 * dt;
+  const double dt4 = dt2 * dt2;
+
+  const double theta_pred = normalize_angle(steering_filter_.theta + dt * steering_filter_.theta_rate);
+  const double theta_rate_pred = steering_filter_.theta_rate;
+
+  const double q00 = 0.25 * dt4 * process_noise;
+  const double q01 = 0.5 * dt3 * process_noise;
+  const double q11 = dt2 * process_noise;
+
+  const double p00_pred = steering_filter_.p00 + dt * (steering_filter_.p10 + steering_filter_.p01) + dt2 * steering_filter_.p11 + q00;
+  const double p01_pred = steering_filter_.p01 + dt * steering_filter_.p11 + q01;
+  const double p10_pred = steering_filter_.p10 + dt * steering_filter_.p11 + q01;
+  const double p11_pred = steering_filter_.p11 + q11;
+
+  const double innovation = normalize_angle(theta - theta_pred);
+  const double innovation_covariance = p00_pred + measurement_noise;
+  if (!std::isfinite(innovation_covariance) || innovation_covariance <= 1e-9) {
+    steering_filter_.initialized = false;
+    return filter_theta_measurement(theta, stamp);
+  }
+
+  const double k0 = p00_pred / innovation_covariance;
+  const double k1 = p10_pred / innovation_covariance;
+
+  steering_filter_.theta = normalize_angle(theta_pred + k0 * innovation);
+  steering_filter_.theta_rate = theta_rate_pred + k1 * innovation;
+
+  const double p00 = (1.0 - k0) * p00_pred;
+  const double p01 = (1.0 - k0) * p01_pred;
+  const double p10 = p10_pred - k1 * p00_pred;
+  const double p11 = p11_pred - k1 * p01_pred;
+  const double p01_sym = 0.5 * (p01 + p10);
+
+  steering_filter_.p00 = std::max(1e-9, p00);
+  steering_filter_.p01 = p01_sym;
+  steering_filter_.p10 = p01_sym;
+  steering_filter_.p11 = std::max(1e-9, p11);
+  steering_filter_.stamp = stamp;
+  return steering_filter_.theta;
 }
 
 }  // namespace smart_follower_control

@@ -71,6 +71,8 @@ struct PerceptionDiagnostics
   std::size_t raw_depth_count{0};
   std::size_t queued_color_count{0};
   std::size_t skipped_synced_frame_count{0};
+  std::size_t dropped_pending_work_count{0};
+  std::size_t dropped_ready_result_count{0};
   std::size_t person_pose_publish_count{0};
   std::size_t last_detection_count{0};
   std::size_t position_valid_count{0};
@@ -108,3 +110,4 @@ struct PerceptionDiagnostics
 };
 
 }  // namespace smart_follower_perception
+

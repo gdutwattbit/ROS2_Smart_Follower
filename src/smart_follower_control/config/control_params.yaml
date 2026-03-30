@@ -8,20 +8,22 @@ follower_controller_node:
     cmd_vel_follow_topic: cmd_vel_follow
     control_rate: 20.0
     target_distance: 0.6
-    theta_deadzone: 0.03
+    steering_kalman:
+      process_noise: 10.0
+      measurement_noise: 0.1
+      initial_covariance: 2.0
     target_timeout: 1.2
     prediction_horizon_s: 0.25
     velocity_ema_alpha: 0.70
-    max_target_speed_mps: 1.50
     pid_r:
-      kp: 0.8
-      ki: 0.0
-      kd: 0.1
+      kp: 5.0
+      ki: 1.0
+      kd: 2.0
     pid_t:
-      kp: 1.2
-      ki: 0.0
-      kd: 0.1
-    pid_i_limit: 0.5
+      kp: 1.5
+      ki: 0.5
+      kd: 0.5
+    pid_i_limit: 1.0
     pid_kaw: 0.2
     limits:
       v_max: 0.6
@@ -35,20 +37,22 @@ follower_controller_node:
     cmd_vel_follow_topic: cmd_vel_follow
     control_rate: 20.0
     target_distance: 0.6
-    theta_deadzone: 0.03
+    steering_kalman:
+      process_noise: 10.0
+      measurement_noise: 0.1
+      initial_covariance: 2.0
     target_timeout: 1.2
     prediction_horizon_s: 0.25
     velocity_ema_alpha: 0.70
-    max_target_speed_mps: 1.50
     pid_r:
-      kp: 0.8
-      ki: 0.0
-      kd: 0.1
+      kp: 5.0
+      ki: 1.0
+      kd: 2.0
     pid_t:
-      kp: 1.2
-      ki: 0.0
-      kd: 0.1
-    pid_i_limit: 0.5
+      kp: 1.5
+      ki: 0.5
+      kd: 0.5
+    pid_i_limit: 1.0
     pid_kaw: 0.2
     limits:
       v_max: 0.6
