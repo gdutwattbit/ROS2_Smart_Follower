@@ -1,28 +1,25 @@
-/**:
-  ros__parameters:
-    person_pose_topic: person_pose
-    follow_command_topic: follow_command
-
 follower_controller_node:
   ros__parameters:
+    person_pose_topic: person_pose
     cmd_vel_follow_topic: cmd_vel_follow
     control_rate: 20.0
     target_distance: 0.6
-    steering_kalman:
-      process_noise: 10.0
-      measurement_noise: 0.1
-      initial_covariance: 2.0
+    theta_deadzone: 0.03
+    stop_hold:
+      distance: 0.1
+      angle: 0.10
+      speed_mps: 0.1
     target_timeout: 1.2
     prediction_horizon_s: 0.25
     velocity_ema_alpha: 0.70
     pid_r:
-      kp: 5.0
-      ki: 1.0
-      kd: 2.0
+      kp: 4.0
+      ki: 0.1
+      kd: 0.0
     pid_t:
-      kp: 1.5
-      ki: 0.5
-      kd: 0.5
+      kp: 0.3
+      ki: 0.0
+      kd: 0.0
     pid_i_limit: 1.0
     pid_kaw: 0.2
     limits:
@@ -34,32 +31,33 @@ follower_controller_node:
 
 /robot1/follower_controller_node:
   ros__parameters:
+    person_pose_topic: person_pose
     cmd_vel_follow_topic: cmd_vel_follow
     control_rate: 20.0
-    target_distance: 0.6
-    steering_kalman:
-      process_noise: 10.0
-      measurement_noise: 0.1
-      initial_covariance: 2.0
-    target_timeout: 1.2
-    prediction_horizon_s: 0.25
-    velocity_ema_alpha: 0.70
+    target_distance: 1.4
+    theta_deadzone: 0.03
+    stop_hold:
+      distance: 0.7
+      angle: 0.15
+      speed_mps: 0.25
+    target_timeout: 0.5
+    prediction_horizon_s: 0.1
+    velocity_ema_alpha: 0.75
     pid_r:
-      kp: 5.0
-      ki: 1.0
-      kd: 2.0
+      kp: 4.0
+      ki: 0.0
+      kd: 1.0
     pid_t:
-      kp: 1.5
-      ki: 0.5
-      kd: 0.5
+      kp: 1.4
+      ki: 0.0
+      kd: 0.0
     pid_i_limit: 1.0
     pid_kaw: 0.2
     limits:
-      v_max: 0.6
-      w_max: 1.2
-      dv_max: 0.5
-      dw_max: 1.5
-
+      v_max: 0.4
+      w_max: 4.0
+      dv_max: 16.0
+      dw_max: 3.0
 obstacle_avoidance_node:
   ros__parameters:
     left_range_topic: left_ultrasonic/range
@@ -78,6 +76,8 @@ obstacle_avoidance_node:
 
 arbiter_node:
   ros__parameters:
+    person_pose_topic: person_pose
+    follow_command_topic: follow_command
     cmd_vel_follow_topic: cmd_vel_follow
     cmd_vel_avoid_topic: cmd_vel_avoid
     cmd_vel_topic: /cmd_vel
@@ -117,3 +117,6 @@ keyboard_command_node:
     key_unlock: u
     key_reset: r
     key_estop: q
+
+
+

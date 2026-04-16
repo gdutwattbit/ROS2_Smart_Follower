@@ -12,8 +12,9 @@ namespace smart_follower_perception
 
 namespace
 {
-constexpr std::array<float, 4> kDepthSampleYRatios{0.78F, 0.68F, 0.58F, 0.48F};
-
+// Low-mounted camera usually sees legs only; sample two leg columns plus center fallback.
+constexpr std::array<float, 3> kDepthSampleXRatios{0.32F, 0.50F, 0.68F};
+constexpr std::array<float, 4> kDepthSampleYRatios{0.64F, 0.74F, 0.84F, 0.90F};
 
 bool extract_depth_meters(const cv::Mat & depth, int x, int y, float & meters)
 {
@@ -39,7 +40,8 @@ void append_window_samples(
   int center_x,
   int center_y,
   const DepthPositionConfig & config,
-  std::vector<float> & valid)
+  std::vector<float> & valid,
+  std::vector<uint8_t> & visited)
 {
   const int side = std::max(1, config.sample_window_px | 1);
   const int radius = side / 2;
@@ -54,6 +56,12 @@ void append_window_samples(
 
   for (int y = y0; y <= y1; ++y) {
     for (int x = x0; x <= x1; ++x) {
+      const auto index = static_cast<std::size_t>(y * depth.cols + x);
+      if (visited[index] != 0U) {
+        continue;
+      }
+      visited[index] = 1U;
+
       float meters = 0.0F;
       if (!extract_depth_meters(depth, x, y, meters)) {
         continue;
@@ -90,13 +98,19 @@ DepthSampleResult sample_depth_from_bbox(
     return result;
   }
 
-  const int center_x = static_cast<int>(std::lround(bbox.x + bbox.width * 0.5F));
   std::vector<float> valid;
+  std::vector<uint8_t> visited(static_cast<std::size_t>(depth.rows * depth.cols), 0U);
   const int side = std::max(1, config.sample_window_px | 1);
-  valid.reserve(static_cast<std::size_t>(side * side * static_cast<int>(kDepthSampleYRatios.size())));
-  for (const float ratio : kDepthSampleYRatios) {
-    const int center_y = static_cast<int>(std::lround(bbox.y + bbox.height * ratio));
-    append_window_samples(depth, center_x, center_y, config, valid);
+  valid.reserve(
+    static_cast<std::size_t>(
+      side * side * static_cast<int>(kDepthSampleYRatios.size()) *
+      static_cast<int>(kDepthSampleXRatios.size())));
+  for (const float x_ratio : kDepthSampleXRatios) {
+    const int sample_x = static_cast<int>(std::lround(bbox.x + bbox.width * x_ratio));
+    for (const float y_ratio : kDepthSampleYRatios) {
+      const int sample_y = static_cast<int>(std::lround(bbox.y + bbox.height * y_ratio));
+      append_window_samples(depth, sample_x, sample_y, config, valid, visited);
+    }
   }
 
   result.valid_samples = static_cast<int>(valid.size());
@@ -159,3 +173,5 @@ std::optional<geometry_msgs::msg::Point> estimate_person_position_from_depth_bbo
 }
 
 }  // namespace smart_follower_perception
+
+

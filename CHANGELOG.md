@@ -4,6 +4,17 @@
 
 ## Unreleased
 
+## beta-0.4.0 - 2026-04-16
+
+### Changed
+- 感知侧深度采样文档统一修正为当前实现：低位腿部多窗口采样，优先覆盖锁定框下半身双腿区域，并保留中轴兜底
+- depth compare 聚合描述修正为窗口中值，与当前代码实现保持一致，不再沿用旧的分位数表述
+- follower 控制侧文档同步整理为当前主线：移除转向卡尔曼滤波，回到 `theta_deadzone + stop_hold` 逻辑
+- follower 目标有效性说明同步更新：短时无效帧优先续用最后一个有效锁定目标，不再仅因 `target_timeout` 直接停住
+- arbiter 当前主线说明同步更新为“正常跟随 / 避障 / 急停”，不再强调旧的 age-based degraded/search 退化链路
+- README / CHANGELOG / 运行时版本字符串统一提升到 `beta-0.4.0`
+
+
 ## beta-0.3.2 - 2026-03-30
 
 ### Changed

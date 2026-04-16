@@ -1,9 +1,9 @@
-﻿#pragma once
+#pragma once
 
 namespace smart_follower_control
 {
 
-inline constexpr char kRuntimeVersion[] = "beta-0.3.2";
+inline constexpr char kRuntimeVersion[] = "beta-0.4.0";
 
 }  // namespace smart_follower_control
 

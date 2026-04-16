@@ -105,17 +105,14 @@ geometry_msgs::msg::Twist ArbiterRuntime::compute_output(const rclcpp::Time & no
 {
   const bool avoid_on = avoid_valid(now_time);
 
-  double age = std::numeric_limits<double>::infinity();
-  if (last_target_time_.nanoseconds() > 0) {
-    age = (now_time - last_target_time_).seconds();
-  }
-
   if (stop_latched_) {
     mode_ = ArbiterMode::STOP;
   } else if (avoid_on) {
     mode_ = ArbiterMode::AVOID;
   } else {
-    mode_ = select_follow_mode(age, config_.thresholds);
+    // Temporarily bypass age-based degraded/search fallback and forward the
+    // follower output directly unless ESTOP or obstacle avoidance is active.
+    mode_ = ArbiterMode::FOLLOW_NORMAL;
   }
 
   geometry_msgs::msg::Twist out;

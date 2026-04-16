@@ -30,9 +30,10 @@ public:
     declare_parameter("cmd_vel_follow_topic", std::string("cmd_vel_follow"));
     declare_parameter("control_rate", 20.0);
     declare_parameter("target_distance", 1.0);
-    declare_parameter("steering_kalman.process_noise", 6.0);
-    declare_parameter("steering_kalman.measurement_noise", 0.02);
-    declare_parameter("steering_kalman.initial_covariance", 1.0);
+    declare_parameter("theta_deadzone", 0.03);
+    declare_parameter("stop_hold.distance", 0.05);
+    declare_parameter("stop_hold.angle", 0.10);
+    declare_parameter("stop_hold.speed_mps", 0.12);
     declare_parameter("target_timeout", 0.4);
     declare_parameter("prediction_horizon_s", 0.25);
     declare_parameter("velocity_ema_alpha", 0.70);
@@ -71,9 +72,10 @@ private:
     p_.cmd_vel_follow_topic = get_parameter("cmd_vel_follow_topic").as_string();
     p_.runtime.control_rate = get_parameter("control_rate").as_double();
     p_.runtime.target_distance = get_parameter("target_distance").as_double();
-    p_.runtime.steering_kalman_process_noise = get_parameter("steering_kalman.process_noise").as_double();
-    p_.runtime.steering_kalman_measurement_noise = get_parameter("steering_kalman.measurement_noise").as_double();
-    p_.runtime.steering_kalman_initial_covariance = get_parameter("steering_kalman.initial_covariance").as_double();
+    p_.runtime.theta_deadzone = get_parameter("theta_deadzone").as_double();
+    p_.runtime.stop_hold_distance = get_parameter("stop_hold.distance").as_double();
+    p_.runtime.stop_hold_angle = get_parameter("stop_hold.angle").as_double();
+    p_.runtime.stop_hold_speed_mps = get_parameter("stop_hold.speed_mps").as_double();
     p_.runtime.target_timeout = get_parameter("target_timeout").as_double();
     p_.runtime.prediction_horizon_s = get_parameter("prediction_horizon_s").as_double();
     p_.runtime.velocity_ema_alpha = get_parameter("velocity_ema_alpha").as_double();
@@ -159,9 +161,10 @@ private:
     else if (name == "cmd_vel_follow_topic") target.cmd_vel_follow_topic = param.as_string();
     else if (name == "control_rate") target.runtime.control_rate = param.as_double();
     else if (name == "target_distance") target.runtime.target_distance = param.as_double();
-    else if (name == "steering_kalman.process_noise") target.runtime.steering_kalman_process_noise = param.as_double();
-    else if (name == "steering_kalman.measurement_noise") target.runtime.steering_kalman_measurement_noise = param.as_double();
-    else if (name == "steering_kalman.initial_covariance") target.runtime.steering_kalman_initial_covariance = param.as_double();
+    else if (name == "theta_deadzone") target.runtime.theta_deadzone = param.as_double();
+    else if (name == "stop_hold.distance") target.runtime.stop_hold_distance = param.as_double();
+    else if (name == "stop_hold.angle") target.runtime.stop_hold_angle = param.as_double();
+    else if (name == "stop_hold.speed_mps") target.runtime.stop_hold_speed_mps = param.as_double();
     else if (name == "target_timeout") target.runtime.target_timeout = param.as_double();
     else if (name == "prediction_horizon_s") target.runtime.prediction_horizon_s = param.as_double();
     else if (name == "velocity_ema_alpha") target.runtime.velocity_ema_alpha = param.as_double();
@@ -187,12 +190,13 @@ private:
     }
 
     candidate.runtime.control_rate = clamp_rate_hz(candidate.runtime.control_rate);
+    candidate.runtime.theta_deadzone = clamp_non_negative(candidate.runtime.theta_deadzone);
+    candidate.runtime.stop_hold_distance = clamp_non_negative(candidate.runtime.stop_hold_distance);
+    candidate.runtime.stop_hold_angle = clamp_non_negative(candidate.runtime.stop_hold_angle);
+    candidate.runtime.stop_hold_speed_mps = clamp_non_negative(candidate.runtime.stop_hold_speed_mps);
     candidate.runtime.target_timeout = clamp_non_negative(candidate.runtime.target_timeout);
     candidate.runtime.prediction_horizon_s = clamp_non_negative(candidate.runtime.prediction_horizon_s);
     candidate.runtime.velocity_ema_alpha = std::clamp(candidate.runtime.velocity_ema_alpha, 0.0, 1.0);
-    candidate.runtime.steering_kalman_process_noise = clamp_non_negative(candidate.runtime.steering_kalman_process_noise);
-    candidate.runtime.steering_kalman_measurement_noise = clamp_non_negative(candidate.runtime.steering_kalman_measurement_noise);
-    candidate.runtime.steering_kalman_initial_covariance = clamp_non_negative(candidate.runtime.steering_kalman_initial_covariance);
     candidate.runtime.i_limit = clamp_non_negative(candidate.runtime.i_limit);
     candidate.runtime.v_max = clamp_non_negative(candidate.runtime.v_max);
     candidate.runtime.w_max = clamp_non_negative(candidate.runtime.w_max);
@@ -267,9 +271,9 @@ private:
     stat.add("target_speed_mps", snapshot.target_speed_mps);
     stat.add("prediction_age_s", snapshot.prediction_age_s);
     stat.add("predicted_target_valid", snapshot.predicted_target_valid);
-    stat.add("steering_filter_ready", snapshot.steering_filter_ready);
+    stat.add("stale_target_hold", snapshot.stale_target_hold);
+    stat.add("hold_zone_active", snapshot.hold_zone_active);
     stat.add("raw_theta", snapshot.raw_theta);
-    stat.add("filtered_theta", snapshot.filtered_theta);
     stat.add("last_pose_lock_id", snapshot.last_pose_lock_id);
     stat.add("last_pose_lock_state", snapshot.last_pose_lock_state);
     stat.add("locked_track_found", snapshot.locked_track_found);
@@ -277,18 +281,14 @@ private:
     stat.add("locked_track_finite", snapshot.locked_track_finite);
     stat.add("target_invalid_reason", snapshot.target_invalid_reason);
     stat.add("invalid_event_count", static_cast<int>(snapshot.invalid_event_count));
-
     int level = diagnostic_msgs::msg::DiagnosticStatus::OK;
     std::string message = "Follower control active";
     if (!snapshot.target_seen) {
       level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
       message = "Waiting for target input";
-    } else if (snapshot.target_age_s > std::max(2.0, p_.runtime.target_timeout * 4.0)) {
-      level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
-      message = "Target input stale";
-    } else if (!snapshot.target_valid || snapshot.target_age_s > p_.runtime.target_timeout) {
+    } else if (!snapshot.target_valid) {
       level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
-      message = snapshot.target_invalid_reason.empty() ? "Target input timed out" : (std::string("Target invalid: ") + snapshot.target_invalid_reason);
+      message = snapshot.target_invalid_reason.empty() ? "Target invalid" : (std::string("Target invalid: ") + snapshot.target_invalid_reason);
     }
     stat.summary(level, message);
   }
@@ -300,3 +300,7 @@ int main(int argc, char ** argv)
 {
   return smart_follower_control::run_lifecycle_node<smart_follower_control::FollowerControllerNode>(argc, argv);
 }
+
+
+
+

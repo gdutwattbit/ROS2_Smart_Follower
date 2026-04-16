@@ -7,18 +7,21 @@
 - 定位：Astra 彩色 + 深度输入，depth compare 主链路
 - 控制：20Hz 跟随控制 + 短时预测补帧 + 超声波避障 + 指令仲裁
 
-> 当前发布标签：`beta-0.3.2`
+> 当前发布标签：`beta-0.4.0`
 
 ---
 
-## 0. beta-0.3.2 本轮更新
+## 0. beta-0.4.0 本轮更新
 
-这一轮主线改动已经收口到 **beta-0.3.2**，重点不是继续加功能，而是把控制链和现场调参真正收实：
+这一轮主线改动已经收口到 **beta-0.4.0**，重点是把低位相机和当前实车控制链真正收成一条更单纯的主线：
 
-- follower 转向侧从简单平滑改为轻量卡尔曼滤波，开放 `steering_kalman.process_noise`、`steering_kalman.measurement_noise`、`steering_kalman.initial_covariance` 供在线热调
-- 保留 `limits.v_max`、`limits.w_max`、`limits.dv_max`、`limits.dw_max` 这组最终输出硬限制，但删除额外的 `theta_deadzone`、大转角自动降速和 `max_target_speed_mps` 目标速度硬截断
-- `try.md` 重写为现场调参与排查速查，补齐 `ros2 param get/set`、话题观测命令和推荐调参顺序
-- VM 工作区已同步并完成 `smart_follower_control` 编译验证，方便后续围绕实车手感继续细调
+- 感知侧深度采样调整为 **低位腿部采样**：锁定框下半身多窗口取样，优先覆盖双腿区域，并保留中轴兜底
+- depth compare 聚合继续采用稳健的窗口中值，配合腿部采样降低腿缝漏到背景时把目标深度拉远的概率
+- follower 控制侧移除转向卡尔曼滤波，回到更直接的角度 deadzone + 停车保持区逻辑，便于现场调参与问题定位
+- follower 侧放宽基于消息 age 的目标失效判定，短时无效帧时优先续用最后一个锁定目标，避免老是因为 `target_timeout` 直接停住
+- arbiter 暂时旁路基于目标 age 的 degraded/search 退化链路，当前主线以“正常跟随 / 避障 / 急停”为主
+- 控制参数文件去掉 `/**` 通配参数，改为节点内显式参数，减少本地包 / VM / 小车之间参数注入不一致的问题
+- README / CHANGELOG 同步提升到 `beta-0.4.0`
 
 ---
 
@@ -35,7 +38,7 @@
                     ↓
                Lock Manager
                     ↓
-      depth compare 定位（bbox 下半部窗口 + median）
+ depth compare 定位（低位腿部窗口 + 中值聚合）
                     ↓
                 /person_pose
                     ↓
@@ -66,7 +69,6 @@ ros2_smart_follower/
 ├─ scripts/
 ├─ README.md
 ├─ CHANGELOG.md
-├─ DEPENDENCIES.md
 └─ try.md
 ```
 
@@ -207,6 +209,6 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 - `smart_follower_bringup`
 
 后续工作重点将转向：
-- 路线收敛清理
-- 参数整理
 - 实车调参与稳定性验证
+- 跟随停车区和前后摆动问题继续收口
+- 低位深度采样与控制联调

@@ -65,12 +65,12 @@ TEST(GeometryUtils, DepthSamplingUsesMedianAndIgnoresInvalidValues)
 
   cv::Mat depth(480, 640, CV_16UC1, cv::Scalar(0));
   const cv::Rect2f bbox(280.0F, 160.0F, 80.0F, 200.0F);
-  const int center_x = 320;
-  const int center_y = 296;
+  const int sample_x = static_cast<int>(std::lround(bbox.x + bbox.width * 0.32F));
+  const int sample_y = static_cast<int>(std::lround(bbox.y + bbox.height * 0.74F));
   const std::uint16_t values[9] = {1500, 0, 1550, 1600, 1580, 40000, 1520, 1510, 1540};
   int idx = 0;
-  for (int y = center_y - 1; y <= center_y + 1; ++y) {
-    for (int x = center_x - 1; x <= center_x + 1; ++x) {
+  for (int y = sample_y - 1; y <= sample_y + 1; ++y) {
+    for (int x = sample_x - 1; x <= sample_x + 1; ++x) {
       depth.at<std::uint16_t>(y, x) = values[idx++];
     }
   }
@@ -93,9 +93,11 @@ TEST(GeometryUtils, DepthPositionRejectsInsufficientValidSamples)
 
   cv::Mat depth(480, 640, CV_16UC1, cv::Scalar(0));
   const cv::Rect2f bbox(280.0F, 160.0F, 80.0F, 200.0F);
-  depth.at<std::uint16_t>(296, 320) = 1500;
-  depth.at<std::uint16_t>(297, 320) = 1520;
-  depth.at<std::uint16_t>(295, 320) = 1510;
+  const int sample_x = static_cast<int>(std::lround(bbox.x + bbox.width * 0.32F));
+  const int sample_y = static_cast<int>(std::lround(bbox.y + bbox.height * 0.74F));
+  depth.at<std::uint16_t>(sample_y, sample_x) = 1500;
+  depth.at<std::uint16_t>(sample_y + 1, sample_x) = 1520;
+  depth.at<std::uint16_t>(sample_y - 1, sample_x) = 1510;
 
   DepthSampleResult sample;
   const auto point = estimate_person_position_from_depth_bbox(
@@ -137,7 +139,8 @@ TEST(GeometryUtils, DepthPositionProducesExpectedLateralSign)
   EXPECT_GT(left->y, camera.y_offset_m);
   EXPECT_LT(right->y, camera.y_offset_m);
 }
-TEST(GeometryUtils, DepthSamplingRecoversUsingLowerBodyWindowsWhenTopIsCutOff)
+
+TEST(GeometryUtils, DepthSamplingRecoversUsingLowerBodyLegWindowWhenTopIsCutOff)
 {
   DepthPositionConfig config;
   config.min_range_m = 0.2F;
@@ -147,12 +150,12 @@ TEST(GeometryUtils, DepthSamplingRecoversUsingLowerBodyWindowsWhenTopIsCutOff)
 
   cv::Mat depth(480, 640, CV_16UC1, cv::Scalar(0));
   const cv::Rect2f bbox(260.0F, 0.0F, 120.0F, 340.0F);
-  const int center_x = 320;
-  const int lower_center_y = static_cast<int>(std::lround(bbox.y + bbox.height * 0.78F));
+  const int sample_x = static_cast<int>(std::lround(bbox.x + bbox.width * 0.68F));
+  const int sample_y = static_cast<int>(std::lround(bbox.y + bbox.height * 0.74F));
   const std::uint16_t values[9] = {1660, 0, 1640, 1650, 1670, 0, 1630, 1680, 1665};
   int idx = 0;
-  for (int y = lower_center_y - 1; y <= lower_center_y + 1; ++y) {
-    for (int x = center_x - 1; x <= center_x + 1; ++x) {
+  for (int y = sample_y - 1; y <= sample_y + 1; ++y) {
+    for (int x = sample_x - 1; x <= sample_x + 1; ++x) {
       depth.at<std::uint16_t>(y, x) = values[idx++];
     }
   }
@@ -160,5 +163,31 @@ TEST(GeometryUtils, DepthSamplingRecoversUsingLowerBodyWindowsWhenTopIsCutOff)
   const auto sample = sample_depth_from_bbox(depth, bbox, config);
   EXPECT_TRUE(sample.valid);
   EXPECT_EQ(sample.valid_samples, 7);
-  EXPECT_NEAR(sample.depth_m, 1.66F, 1e-3F);
+  EXPECT_NEAR(sample.depth_m, 1.65F, 1e-3F);
+}
+
+TEST(GeometryUtils, DepthSamplingRecoversUsingLowerBodySideWindowsWhenCenterIsEmpty)
+{
+  DepthPositionConfig config;
+  config.min_range_m = 0.2F;
+  config.max_range_m = 4.0F;
+  config.sample_window_px = 9;
+  config.min_valid_samples = 5;
+
+  cv::Mat depth(480, 640, CV_16UC1, cv::Scalar(0));
+  const cv::Rect2f bbox(240.0F, 80.0F, 180.0F, 320.0F);
+  const int sample_x = static_cast<int>(std::lround(bbox.x + bbox.width * 0.32F));
+  const int sample_y = static_cast<int>(std::lround(bbox.y + bbox.height * 0.74F));
+  const std::uint16_t values[9] = {940, 955, 960, 950, 948, 952, 945, 958, 962};
+  int idx = 0;
+  for (int y = sample_y - 1; y <= sample_y + 1; ++y) {
+    for (int x = sample_x - 1; x <= sample_x + 1; ++x) {
+      depth.at<std::uint16_t>(y, x) = values[idx++];
+    }
+  }
+
+  const auto sample = sample_depth_from_bbox(depth, bbox, config);
+  EXPECT_TRUE(sample.valid);
+  EXPECT_EQ(sample.valid_samples, 9);
+  EXPECT_NEAR(sample.depth_m, 0.948F, 1e-3F);
 }

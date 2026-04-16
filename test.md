@@ -359,3 +359,81 @@
 - On the current full stack, this moved `person_pose` from roughly `4.6 Hz` baseline to roughly `9.0 Hz`
 - Camera topic rates also improved into the `21~23 Hz` range in the latest run, which is very close to the practical `21 Hz` perception target
 - The remaining headroom is still limited by perception CPU saturation, especially YOLO/ReID on detect frames
+
+## 2026-04-02 Lower-Body Depth Sampling Patch
+
+### Goal
+
+- Reduce close-range `person_pose` NaN frames with a lightweight depth-sampling strategy
+- Keep CPU overhead very low on Raspberry Pi 5B
+
+### Code Change
+
+- Changed depth sampling in `smart_follower_perception/src/geometry_utils.cpp`
+- Replaced the old single-column vertical sampling with sparse lower-body anchors:
+  - `x ratios = {0.35, 0.50, 0.65}`
+  - `y ratios = {0.62, 0.74, 0.86}`
+- Sampling now focuses on the lower half of the person box instead of the torso/center only
+- Added per-pixel dedup across overlapping sample windows so valid-sample counts are not artificially inflated
+- This keeps the algorithm simple: 9 sparse windows, median depth, no heavy fitting or temporal computation
+
+### Test Update
+
+- Updated geometry unit tests to match the new lower-body sampling anchors
+- Added a side-window recovery case where center samples are empty but lower-body side samples still recover valid depth
+
+### Car Build Verification
+
+- Synced package: `smart_follower_perception`
+- Build target: car container `ros2`
+- Build command:
+  - `docker exec ros2 bash -lc 'source /opt/ros/humble/setup.bash && source /home/wheeltec/wheeltec_ros2/install/setup.bash && cd /home/wheeltec/ros2_shared_dir/ros2_smart_follower && colcon build --symlink-install --packages-select smart_follower_perception --event-handlers console_direct+'`
+- Result: success
+
+### Car Test Verification
+
+- Test command:
+  - `docker exec ros2 bash -lc 'source /opt/ros/humble/setup.bash && source /home/wheeltec/wheeltec_ros2/install/setup.bash && cd /home/wheeltec/ros2_shared_dir/ros2_smart_follower && colcon test --packages-select smart_follower_perception --event-handlers console_direct+ && colcon test-result --verbose --test-result-base build/smart_follower_perception'`
+- Result: success
+- Summary: `23 tests, 0 errors, 0 failures, 0 skipped`
+
+### Next Observation Focus
+
+- Re-test close-range lock scenarios on the car
+- Compare whether these warnings become less frequent:
+  - `depth_window_no_valid_samples`
+  - `locked_track_position_nan`
+- Especially observe people near the image top edge or with large/clipped boxes
+
+## 2026-04-03 VM Validation: Low-Mounted Leg-Focused Depth Sampling
+
+### Goal
+
+- Optimize depth sampling for low camera view that mainly sees legs
+- Keep algorithm lightweight and robust for normal front-follow posture
+
+### Algorithm Update
+
+- Sampling anchors changed to leg-focused sparse points inside lower body
+- X anchors: `0.32`, `0.68` (two leg columns)
+- Y anchors: `0.64`, `0.74`, `0.84`, `0.90` (lower body only)
+- Kept small window sampling and per-pixel dedup across overlapping windows
+- Depth aggregation changed from median to near-depth quantile `P35`
+  - better resistance to background leakage through leg gaps
+
+### Code Paths
+
+- `src/smart_follower_perception/src/geometry_utils.cpp`
+- `src/smart_follower_perception/test/test_geometry_utils.cpp`
+
+### VM Build/Test
+
+- VM workspace: `/home/wheeltec/ros2_smart_follower`
+- Build command:
+  - `colcon build --symlink-install --packages-select smart_follower_perception --event-handlers console_direct+`
+- Result: success
+- Test command:
+  - `colcon test --packages-select smart_follower_perception --event-handlers console_direct+`
+  - `colcon test-result --verbose --test-result-base build/smart_follower_perception`
+- Result: success
+- Summary: `23 tests, 0 errors, 0 failures, 0 skipped`

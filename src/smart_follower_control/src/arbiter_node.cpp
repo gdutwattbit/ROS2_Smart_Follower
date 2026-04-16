@@ -267,12 +267,9 @@ private:
     if (snapshot.stop_latched) {
       level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
       message = "Arbiter stop latched";
-    } else if (snapshot.last_target_age_s < 0.0) {
+    } else if (snapshot.mode == ArbiterMode::AVOID) {
       level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
-      message = "Waiting for confirmed target";
-    } else if (snapshot.mode == ArbiterMode::SEARCH || snapshot.mode == ArbiterMode::FOLLOW_DEGRADED) {
-      level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
-      message = "Arbiter running in degraded mode";
+      message = "Arbiter running obstacle avoidance";
     }
     stat.summary(level, message);
   }
