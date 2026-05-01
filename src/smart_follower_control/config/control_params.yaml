@@ -27,37 +27,6 @@ follower_controller_node:
       w_max: 1.2
       dv_max: 0.5
       dw_max: 1.5
-
-
-/robot1/follower_controller_node:
-  ros__parameters:
-    person_pose_topic: person_pose
-    cmd_vel_follow_topic: cmd_vel_follow
-    control_rate: 20.0
-    target_distance: 1.4
-    theta_deadzone: 0.03
-    stop_hold:
-      distance: 0.7
-      angle: 0.15
-      speed_mps: 0.25
-    target_timeout: 0.5
-    prediction_horizon_s: 0.1
-    velocity_ema_alpha: 0.75
-    pid_r:
-      kp: 4.0
-      ki: 0.0
-      kd: 1.0
-    pid_t:
-      kp: 1.4
-      ki: 0.0
-      kd: 0.0
-    pid_i_limit: 1.0
-    pid_kaw: 0.2
-    limits:
-      v_max: 0.4
-      w_max: 4.0
-      dv_max: 16.0
-      dw_max: 3.0
 obstacle_avoidance_node:
   ros__parameters:
     left_range_topic: left_ultrasonic/range
@@ -82,11 +51,6 @@ arbiter_node:
     cmd_vel_avoid_topic: cmd_vel_avoid
     cmd_vel_topic: /cmd_vel
     publish_rate: 20.0
-    lost_time_normal_max: 0.2
-    lost_time_degraded_max: 0.6
-    lost_time_search_max: 2.0
-    degraded_linear_scale: 0.5
-    search_angular_speed: 0.3
     avoid_enter_threshold: 3
     avoid_exit_threshold: 5
     avoid_exit_hysteresis_time: 0.2
@@ -117,6 +81,4 @@ keyboard_command_node:
     key_unlock: u
     key_reset: r
     key_estop: q
-
-
 

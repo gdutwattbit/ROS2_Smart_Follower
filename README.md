@@ -7,21 +7,21 @@
 - 定位：Astra 彩色 + 深度输入，depth compare 主链路
 - 控制：20Hz 跟随控制 + 短时预测补帧 + 超声波避障 + 指令仲裁
 
-> 当前发布标签：`beta-0.4.0`
+> 当前发布标签：`beta-0.5.0`
 
 ---
 
-## 0. beta-0.4.0 本轮更新
+## 0. beta-0.5.0 本轮更新
 
-这一轮主线改动已经收口到 **beta-0.4.0**，重点是把低位相机和当前实车控制链真正收成一条更单纯的主线：
+这一轮主线改动已经收口到 **beta-0.5.0**，重点不是继续堆功能，而是把当前仓库真正整理成一套结构清晰、能单节点调试、日志语义也统一的版本：
 
-- 感知侧深度采样调整为 **低位腿部采样**：锁定框下半身多窗口取样，优先覆盖双腿区域，并保留中轴兜底
-- depth compare 聚合继续采用稳健的窗口中值，配合腿部采样降低腿缝漏到背景时把目标深度拉远的概率
-- follower 控制侧移除转向卡尔曼滤波，回到更直接的角度 deadzone + 停车保持区逻辑，便于现场调参与问题定位
-- follower 侧放宽基于消息 age 的目标失效判定，短时无效帧时优先续用最后一个锁定目标，避免老是因为 `target_timeout` 直接停住
-- arbiter 暂时旁路基于目标 age 的 degraded/search 退化链路，当前主线以“正常跟随 / 避障 / 急停”为主
-- 控制参数文件去掉 `/**` 通配参数，改为节点内显式参数，减少本地包 / VM / 小车之间参数注入不一致的问题
-- README / CHANGELOG 同步提升到 `beta-0.4.0`
+- `control` 参数文件完成收口：基础配置只保留一套生产默认值，`robot1` 调试改为额外 overlay YAML，不再在同一文件里维护两整套完整参数
+- `arbiter` 正式收敛为 `STOP / FOLLOW / AVOID` 三态，旧的 degraded/search 路线退出运行时行为，只保留一轮废弃参数兼容声明
+- `perception` 主流程完成职责拆分：节点本身负责 lifecycle、ROS 接口、参数热更新和 diagnostics，异步调度与单帧处理从大流程中拆开
+- `control` 各节点参数处理方式统一到同一模式：参数 struct、校验归一化、runtime apply、接口参数重建、纯算法参数热更新
+- bringup / build 中与工作区路径、模型路径、硬件目录强绑定的残留继续清理，默认 launch 保留，但不再依赖向上回溯工作区猜模型目录
+- 启动日志完成第一轮整理：默认启动不再刷 `arbiter` 废弃参数告警，`perception` 相机内参重试日志改为摘要式输出
+- README / CHANGELOG / 运行时版本字符串统一提升到 `beta-0.5.0`
 
 ---
 
@@ -52,6 +52,7 @@ Follower / Obstacle / Arbiter
 - `TrackedPerson.position` 由对齐深度图取样得到
 - `/person_pose`、控制侧接口、生命周期行为保持稳定
 - perception 会请求 Astra 的 `/camera/get_camera_info` 作为真实内参来源
+- control 单节点调试时建议叠加加载基础 YAML 与 `control_params_robot1_debug.yaml`
 
 ---
 
@@ -106,6 +107,7 @@ ros2_smart_follower/
 - launch 组织
 - 默认 YAML 参数
 - 模型路径覆盖
+- 设备相关 bringup 组合
 
 ---
 
@@ -154,12 +156,6 @@ ros2_smart_follower/
 - **libgpiod 源码目录**
   - `/home/wheeltec/wheeltec_ros2/third_party/libgpiod-2.1.3`
 
-> 注意：这两套库目前在容器里是存在的，但 **不在本仓库的 `third_party/` 下**。
-> 当前主线代码已经同时补上：
-> - 显式绝对路径 `/home/wheeltec/wheeltec_ros2/third_party/...`
-> - 环境变量路径 `$HOME/wheeltec_ros2/third_party/...`
-> 这样即使容器里用 `root` 编译，也不会再因为 `$HOME=/root` 而漏检。
-
 如需在小车容器内显式指定依赖路径，建议先执行：
 
 ```bash
@@ -174,11 +170,14 @@ export PKG_CONFIG_PATH=$ONNXRUNTIME_ROOT/lib/pkgconfig:$PKG_CONFIG_PATH
 ros2 launch smart_follower_bringup smart_follower.launch.py
 ```
 
+### 单独调试 follower_controller_node
+```bash
+ros2 run smart_follower_control follower_controller_node   --ros-args   --params-file src/smart_follower_control/config/control_params.yaml   --params-file src/smart_follower_control/config/control_params_robot1_debug.yaml   -r __ns:=/robot1
+```
+
 ### 没有底盘驱动包时，仅启动本项目链路
 ```bash
-ros2 launch smart_follower_bringup smart_follower.launch.py \
-  robot_ns:=robot1 \
-  bringup_robot:=false
+ros2 launch smart_follower_bringup smart_follower.launch.py   robot_ns:=robot1   bringup_robot:=false
 ```
 
 ---
@@ -188,11 +187,13 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 建议先看：
 - `src/smart_follower_bringup/config/perception_params.yaml`
 - `src/smart_follower_control/config/control_params.yaml`
+- `src/smart_follower_control/config/control_params_robot1_debug.yaml`
 - `src/smart_follower_perception/src/perception_node.cpp`
 - `src/smart_follower_perception/src/perception_pipeline.cpp`
-- `src/smart_follower_perception/src/tracker.cpp`
+- `src/smart_follower_perception/src/perception_processing.cpp`
 - `src/smart_follower_control/src/follower_runtime.cpp`
 - `src/smart_follower_control/src/obstacle_runtime.cpp`
+- `src/smart_follower_control/src/arbiter_runtime.cpp`
 - `try.md`
 
 其中：
@@ -210,5 +211,5 @@ ros2 launch smart_follower_bringup smart_follower.launch.py \
 
 后续工作重点将转向：
 - 实车调参与稳定性验证
-- 跟随停车区和前后摆动问题继续收口
-- 低位深度采样与控制联调
+- perception 在线热更新与 worker 启停路径继续回归
+- 控制侧剩余可读性与局部日志继续按现场反馈微调

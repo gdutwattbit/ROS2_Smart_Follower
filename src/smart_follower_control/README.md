@@ -8,37 +8,28 @@ ultrasonic -> obstacle_runtime -> cmd_vel_avoid
 follow + avoid -> arbiter_runtime -> /cmd_vel
 ```
 
-## 1. 主要模块
+## Main Modules
 
-- `src/follower_controller_node.cpp`
-  - 跟随控制节点
-- `src/follower_runtime.cpp`
-  - 跟随控制核心逻辑
-- `src/obstacle_avoidance_node.cpp`
-  - 避障节点
-- `src/obstacle_runtime.cpp`
-  - 避障核心逻辑
-- `src/arbiter_node.cpp`
-  - 仲裁节点
-- `src/arbiter_runtime.cpp`
-  - 仲裁状态机与超时逻辑
-- `src/ultrasonic_range_node.cpp`
-  - 左右超声波采样
+- `follower_runtime.*`: 跟随控制核心逻辑
+- `obstacle_runtime.*`: 超声波避障逻辑
+- `arbiter_runtime.*`: 最终速度仲裁，正式行为为 `STOP / FOLLOW / AVOID`
+- `ultrasonic_runtime.*`: 左右超声波采样与 GPIO 后端适配
 
-## 2. 当前设计重点
+## Parameter Layout
 
-- follower 保持 20Hz 输出，可消费较低频感知输入
-- obstacle 当前只依赖左右超声波，不再消费深度图
-- arbiter 统一决定最终底盘输出 `/cmd_vel`
+- 基础参数文件：`src/smart_follower_control/config/control_params.yaml`
+- `robot1` 单节点调试覆盖：`src/smart_follower_control/config/control_params_robot1_debug.yaml`
 
-## 3. 参数入口
+调试时建议显式叠加：
 
-主要看：
-- `src/smart_follower_control/config/control_params.yaml`
+```bash
+ros2 run smart_follower_control follower_controller_node \
+  --ros-args \
+  --params-file src/smart_follower_control/config/control_params.yaml \
+  --params-file src/smart_follower_control/config/control_params_robot1_debug.yaml
+```
 
-## 4. 如果你要改哪里
+## Notes
 
-- 改跟随平滑性：看 `follower_runtime.*`
-- 改避障阈值 / 行为：看 `obstacle_runtime.*`
-- 改丢目标后的退化策略：看 `arbiter_runtime.*`
-- 改超声波读数流程：看 `ultrasonic_runtime.*`
+- `arbiter` 仍声明 `lost_time_* / degraded_linear_scale / search_angular_speed` 这组旧参数一轮兼容，但运行时已忽略。
+- 控制节点热更新遵循统一策略：topic / rate 变化才重建接口，纯运行参数在线更新。

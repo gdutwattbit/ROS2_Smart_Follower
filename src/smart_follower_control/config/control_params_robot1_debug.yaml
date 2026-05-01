@@ -1,0 +1,20 @@
+/robot1/follower_controller_node:
+  ros__parameters:
+    target_distance: 1.4
+    stop_hold:
+      distance: 0.7
+      angle: 0.15
+      speed_mps: 0.25
+    target_timeout: 0.5
+    prediction_horizon_s: 0.1
+    velocity_ema_alpha: 0.75
+    pid_r:
+      ki: 0.0
+      kd: 1.0
+    pid_t:
+      kp: 1.4
+    limits:
+      v_max: 0.4
+      w_max: 4.0
+      dv_max: 16.0
+      dw_max: 3.0

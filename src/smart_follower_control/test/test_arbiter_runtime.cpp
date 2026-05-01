@@ -25,14 +25,10 @@ smart_follower_msgs::msg::PersonPoseArray make_locked_pose(const rclcpp::Time & 
 }
 }  // namespace
 
-TEST(ArbiterRuntime, DegradesAndStopsAsAgeGrowsWithoutLatching)
+TEST(ArbiterRuntime, FollowsWithoutAgeBasedDegradation)
 {
   smart_follower_control::ArbiterRuntime runtime;
   smart_follower_control::ArbiterRuntimeConfig config;
-  config.thresholds.lost_time_normal_max = 0.2;
-  config.thresholds.lost_time_degraded_max = 0.6;
-  config.thresholds.lost_time_search_max = 2.0;
-  config.degraded_linear_scale = 0.5;
   runtime.set_config(config);
   runtime.activate();
 
@@ -49,26 +45,22 @@ TEST(ArbiterRuntime, DegradesAndStopsAsAgeGrowsWithoutLatching)
   EXPECT_DOUBLE_EQ(out.angular.z, 0.1);
 
   out = runtime.compute_output(t0 + rclcpp::Duration::from_seconds(0.3));
-  EXPECT_DOUBLE_EQ(out.linear.x, 0.2);
+  EXPECT_DOUBLE_EQ(out.linear.x, 0.4);
   EXPECT_DOUBLE_EQ(out.angular.z, 0.1);
 
   out = runtime.compute_output(t0 + rclcpp::Duration::from_seconds(2.5));
-  EXPECT_DOUBLE_EQ(out.linear.x, 0.0);
-  EXPECT_DOUBLE_EQ(out.angular.z, 0.0);
+  EXPECT_DOUBLE_EQ(out.linear.x, 0.4);
+  EXPECT_DOUBLE_EQ(out.angular.z, 0.1);
 
   const auto snapshot = runtime.snapshot(t0 + rclcpp::Duration::from_seconds(2.5));
-  EXPECT_EQ(snapshot.mode, smart_follower_control::ArbiterMode::STOP);
+  EXPECT_EQ(snapshot.mode, smart_follower_control::ArbiterMode::FOLLOW);
   EXPECT_FALSE(snapshot.stop_latched);
 }
 
-TEST(ArbiterRuntime, RecoversAfterTimeoutWhenTargetReturns)
+TEST(ArbiterRuntime, HandlesStopAndResetExplicitly)
 {
   smart_follower_control::ArbiterRuntime runtime;
   smart_follower_control::ArbiterRuntimeConfig config;
-  config.thresholds.lost_time_normal_max = 0.2;
-  config.thresholds.lost_time_degraded_max = 0.6;
-  config.thresholds.lost_time_search_max = 2.0;
-  config.degraded_linear_scale = 0.5;
   runtime.set_config(config);
   runtime.activate();
 
@@ -80,17 +72,53 @@ TEST(ArbiterRuntime, RecoversAfterTimeoutWhenTargetReturns)
   follow.angular.z = 0.1;
   runtime.on_follow_cmd(follow);
 
-  auto out = runtime.compute_output(t0 + rclcpp::Duration::from_seconds(2.5));
+  smart_follower_msgs::msg::FollowCommand stop;
+  stop.command = smart_follower_msgs::msg::FollowCommand::ESTOP;
+  runtime.on_user_cmd(stop);
+
+  auto out = runtime.compute_output(t0 + rclcpp::Duration::from_seconds(0.1));
   EXPECT_DOUBLE_EQ(out.linear.x, 0.0);
   EXPECT_DOUBLE_EQ(out.angular.z, 0.0);
 
-  const auto t1 = t0 + rclcpp::Duration::from_seconds(2.6);
-  runtime.on_person_pose(make_locked_pose(t1));
-  out = runtime.compute_output(t1 + rclcpp::Duration::from_seconds(0.05));
+  smart_follower_msgs::msg::FollowCommand reset;
+  reset.command = smart_follower_msgs::msg::FollowCommand::RESET;
+  runtime.on_user_cmd(reset);
+  runtime.on_follow_cmd(follow);
+
+  out = runtime.compute_output(t0 + rclcpp::Duration::from_seconds(0.2));
   EXPECT_DOUBLE_EQ(out.linear.x, 0.4);
   EXPECT_DOUBLE_EQ(out.angular.z, 0.1);
 
-  const auto snapshot = runtime.snapshot(t1 + rclcpp::Duration::from_seconds(0.05));
-  EXPECT_EQ(snapshot.mode, smart_follower_control::ArbiterMode::FOLLOW_NORMAL);
+  const auto snapshot = runtime.snapshot(t0 + rclcpp::Duration::from_seconds(0.2));
+  EXPECT_EQ(snapshot.mode, smart_follower_control::ArbiterMode::FOLLOW);
   EXPECT_FALSE(snapshot.stop_latched);
+}
+
+TEST(ArbiterRuntime, SwitchesToAvoidWhenAvoidanceIsLatched)
+{
+  smart_follower_control::ArbiterRuntime runtime;
+  smart_follower_control::ArbiterRuntimeConfig config;
+  config.avoid_enter_threshold = 2;
+  config.avoid_exit_threshold = 2;
+  runtime.set_config(config);
+  runtime.activate();
+
+  geometry_msgs::msg::Twist follow;
+  follow.linear.x = 0.3;
+  follow.angular.z = 0.1;
+  runtime.on_follow_cmd(follow);
+
+  geometry_msgs::msg::Twist avoid;
+  avoid.angular.z = 0.5;
+  const rclcpp::Time t0(10, 0, RCL_ROS_TIME);
+  runtime.on_avoid_cmd(avoid, t0);
+  runtime.on_avoid_cmd(avoid, t0 + rclcpp::Duration::from_seconds(0.01));
+
+  const auto out = runtime.compute_output(t0 + rclcpp::Duration::from_seconds(0.02));
+  EXPECT_DOUBLE_EQ(out.linear.x, 0.0);
+  EXPECT_DOUBLE_EQ(out.angular.z, 0.5);
+
+  const auto snapshot = runtime.snapshot(t0 + rclcpp::Duration::from_seconds(0.02));
+  EXPECT_EQ(snapshot.mode, smart_follower_control::ArbiterMode::AVOID);
+  EXPECT_TRUE(snapshot.avoid_latched);
 }

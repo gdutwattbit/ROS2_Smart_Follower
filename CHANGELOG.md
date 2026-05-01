@@ -4,6 +4,27 @@
 
 ## Unreleased
 
+## beta-0.5.0 - 2026-05-01
+
+### Changed
+- `control` 参数配置完成收口：基础 YAML 只保留一套生产默认值，`robot1` 单节点调试改为通过额外 overlay YAML 叠加加载，不再在同一文件中维护两整套完整参数
+- `arbiter` 正式收敛为 `STOP / FOLLOW / AVOID` 三态，旧的 degraded/search 退化路线退出运行时行为，诊断语义同步更新为当前真实状态
+- `control` 各节点参数处理方式进一步统一，收敛为参数 struct、校验归一化、runtime apply、接口参数重建和纯算法参数热更新这套固定模式
+- `perception` 主流程完成职责拆分，节点本体与异步调度、单帧处理核心的边界更清晰，可读性明显提升
+- bringup 与 build 中对工作区目录、模型目录和硬件路径的历史猜测逻辑继续清理，默认 launch 保留，但核心实现不再依赖脆弱路径推导
+- 根 README 补齐当前主线路线、单节点调试方式和本轮版本说明，CHANGELOG 同步补录本次重构发布记录
+- README / CHANGELOG / 运行时版本字符串统一提升到 `beta-0.5.0`
+
+### Fixed
+- `arbiter` 默认启动时不再因为打包配置中的兼容参数而刷废弃告警，只有真正传入废弃 override 时才提示
+- `perception` 相机内参服务重试日志改为摘要式输出，避免服务缺失时每次 attempt 都重复刷屏
+- 默认 bringup 使用的模型路径和安装内容保持一致，减少工作区位置变化时的启动不确定性
+
+### Verified
+- VM 工作区 `/home/wheeltec/ros2_smart_follower` 已同步本轮改动，并完成 `smart_follower_control` 与 `smart_follower_perception` 重新编译通过
+- VM 上逐个节点启动检查后确认：`follower_controller_node`、`obstacle_avoidance_node`、`arbiter_node`、`ultrasonic_range_node`、`keyboard_command_node` 当前启动日志已明显收敛
+- `perception_node` 在缺少相机服务或模型运行条件不足时，错误语义保持明确，但重复日志数量已下降到可接受范围
+
 ## beta-0.4.0 - 2026-04-16
 
 ### Changed
@@ -13,7 +34,6 @@
 - follower 目标有效性说明同步更新：短时无效帧优先续用最后一个有效锁定目标，不再仅因 `target_timeout` 直接停住
 - arbiter 当前主线说明同步更新为“正常跟随 / 避障 / 急停”，不再强调旧的 age-based degraded/search 退化链路
 - README / CHANGELOG / 运行时版本字符串统一提升到 `beta-0.4.0`
-
 
 ## beta-0.3.2 - 2026-03-30
 

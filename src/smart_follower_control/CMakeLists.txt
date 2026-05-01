@@ -19,17 +19,8 @@ find_package(diagnostic_updater REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(smart_follower_msgs REQUIRED)
 
-set(SMART_FOLLOWER_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party")
-set(SMART_FOLLOWER_WHEELTEC_THIRD_PARTY_DIR "$ENV{HOME}/wheeltec_ros2/third_party")
-set(SMART_FOLLOWER_WHEELTEC_ABS_THIRD_PARTY_DIR "/home/wheeltec/wheeltec_ros2/third_party")
 set(LIBGPIOD_HINTS
   $ENV{LIBGPIOD_ROOT}
-  ${SMART_FOLLOWER_WHEELTEC_ABS_THIRD_PARTY_DIR}/libgpiod
-  ${SMART_FOLLOWER_WHEELTEC_ABS_THIRD_PARTY_DIR}/libgpiod/install
-  ${SMART_FOLLOWER_WHEELTEC_THIRD_PARTY_DIR}/libgpiod
-  ${SMART_FOLLOWER_WHEELTEC_THIRD_PARTY_DIR}/libgpiod/install
-  ${SMART_FOLLOWER_THIRD_PARTY_DIR}/libgpiod
-  ${SMART_FOLLOWER_THIRD_PARTY_DIR}/libgpiod/install
   /usr
   /usr/local
 )
@@ -69,8 +60,7 @@ ament_target_dependencies(smart_follower_control_core
   sensor_msgs
   smart_follower_msgs
 )
-target_include_directories(smart_follower_control_core PUBLIC include ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(smart_follower_control_core ${OpenCV_LIBS})
+target_include_directories(smart_follower_control_core PUBLIC include)
 
 add_executable(follower_controller_node src/follower_controller_node.cpp)
 ament_target_dependencies(follower_controller_node ${common_deps})
@@ -132,11 +122,6 @@ if(BUILD_TESTING)
   find_package(ament_cmake_xmllint REQUIRED)
   ament_lint_cmake()
   ament_xmllint()
-
-  ament_add_gtest(test_arbiter_sm test/test_arbiter_sm.cpp)
-  if(TARGET test_arbiter_sm)
-    target_include_directories(test_arbiter_sm PRIVATE include)
-  endif()
 
   ament_add_gtest(test_arbiter_runtime test/test_arbiter_runtime.cpp)
   if(TARGET test_arbiter_runtime)

@@ -17,6 +17,31 @@
 namespace smart_follower_control
 {
 
+namespace
+{
+void declare_obstacle_parameters(rclcpp_lifecycle::LifecycleNode & node)
+{
+  node.declare_parameter("left_range_topic", std::string("left_ultrasonic/range"));
+  node.declare_parameter("right_range_topic", std::string("right_ultrasonic/range"));
+  node.declare_parameter("cmd_vel_input_topic", std::string("/cmd_vel"));
+  node.declare_parameter("cmd_vel_avoid_topic", std::string("cmd_vel_avoid"));
+  node.declare_parameter("rate", 20.0);
+  node.declare_parameter("d_min", 0.12);
+  node.declare_parameter("t_react", 0.20);
+  node.declare_parameter("a_brake", 0.8);
+  node.declare_parameter("margin", 0.08);
+  node.declare_parameter("exit_margin", 0.08);
+  node.declare_parameter("turn_speed", 0.5);
+  node.declare_parameter("slow_turn_speed", 0.25);
+  node.declare_parameter("back_speed", -0.15);
+}
+
+void normalize_obstacle_runtime(ObstacleRuntimeConfig & config)
+{
+  config.a_brake = clamp_positive(config.a_brake, 1e-3);
+}
+}  // namespace
+
 class ObstacleAvoidanceNode : public rclcpp_lifecycle::LifecycleNode
 {
 public:
@@ -25,19 +50,7 @@ public:
   ObstacleAvoidanceNode()
   : rclcpp_lifecycle::LifecycleNode("obstacle_avoidance_node")
   {
-    declare_parameter("left_range_topic", std::string("left_ultrasonic/range"));
-    declare_parameter("right_range_topic", std::string("right_ultrasonic/range"));
-    declare_parameter("cmd_vel_input_topic", std::string("/cmd_vel"));
-    declare_parameter("cmd_vel_avoid_topic", std::string("cmd_vel_avoid"));
-    declare_parameter("rate", 20.0);
-    declare_parameter("d_min", 0.12);
-    declare_parameter("t_react", 0.20);
-    declare_parameter("a_brake", 0.8);
-    declare_parameter("margin", 0.08);
-    declare_parameter("exit_margin", 0.08);
-    declare_parameter("turn_speed", 0.5);
-    declare_parameter("slow_turn_speed", 0.25);
-    declare_parameter("back_speed", -0.15);
+    declare_obstacle_parameters(*this);
   }
 
 private:
@@ -60,6 +73,20 @@ private:
   diagnostic_updater::Updater diagnostics_{this};
   ObstacleRuntime runtime_;
 
+  void apply_runtime_config()
+  {
+    runtime_.set_config(p_.runtime);
+  }
+
+  bool needs_interface_recreation(const Params & next) const
+  {
+    return next.left_topic != p_.left_topic ||
+           next.right_topic != p_.right_topic ||
+           next.cmd_vel_input_topic != p_.cmd_vel_input_topic ||
+           next.cmd_vel_avoid_topic != p_.cmd_vel_avoid_topic ||
+           next.rate != p_.rate;
+  }
+
   void load_parameters()
   {
     p_.left_topic = get_parameter("left_range_topic").as_string();
@@ -75,7 +102,30 @@ private:
     p_.runtime.turn_speed = get_parameter("turn_speed").as_double();
     p_.runtime.slow_turn_speed = get_parameter("slow_turn_speed").as_double();
     p_.runtime.back_speed = get_parameter("back_speed").as_double();
-    runtime_.set_config(p_.runtime);
+    p_.rate = clamp_rate_hz(p_.rate);
+    normalize_obstacle_runtime(p_.runtime);
+    apply_runtime_config();
+  }
+
+  void on_left_range(const sensor_msgs::msg::Range::SharedPtr msg)
+  {
+    if (msg) {
+      runtime_.on_left_range(msg->range, rclcpp::Time(msg->header.stamp));
+    }
+  }
+
+  void on_right_range(const sensor_msgs::msg::Range::SharedPtr msg)
+  {
+    if (msg) {
+      runtime_.on_right_range(msg->range, rclcpp::Time(msg->header.stamp));
+    }
+  }
+
+  void on_cmd_vel_input(const geometry_msgs::msg::Twist::SharedPtr msg)
+  {
+    if (msg) {
+      runtime_.on_cmd_vel(*msg);
+    }
   }
 
   void recreate_interfaces(bool preserve_activation)
@@ -93,27 +143,15 @@ private:
     left_sub_ = create_subscription<sensor_msgs::msg::Range>(
       p_.left_topic,
       rclcpp::SensorDataQoS(),
-      [this](const sensor_msgs::msg::Range::SharedPtr msg) {
-        if (msg) {
-          runtime_.on_left_range(msg->range, rclcpp::Time(msg->header.stamp));
-        }
-      });
+      std::bind(&ObstacleAvoidanceNode::on_left_range, this, std::placeholders::_1));
     right_sub_ = create_subscription<sensor_msgs::msg::Range>(
       p_.right_topic,
       rclcpp::SensorDataQoS(),
-      [this](const sensor_msgs::msg::Range::SharedPtr msg) {
-        if (msg) {
-          runtime_.on_right_range(msg->range, rclcpp::Time(msg->header.stamp));
-        }
-      });
+      std::bind(&ObstacleAvoidanceNode::on_right_range, this, std::placeholders::_1));
     vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
       p_.cmd_vel_input_topic,
       10,
-      [this](const geometry_msgs::msg::Twist::SharedPtr msg) {
-        if (msg) {
-          runtime_.on_cmd_vel(*msg);
-        }
-      });
+      std::bind(&ObstacleAvoidanceNode::on_cmd_vel_input, this, std::placeholders::_1));
 
     avoid_pub_ = create_publisher<geometry_msgs::msg::Twist>(p_.cmd_vel_avoid_topic, 10);
     timer_ = create_wall_timer(hz_to_period(p_.rate), std::bind(&ObstacleAvoidanceNode::on_timer, this));
@@ -184,11 +222,13 @@ private:
     }
 
     candidate.rate = clamp_rate_hz(candidate.rate);
-    candidate.runtime.a_brake = clamp_positive(candidate.runtime.a_brake, 1e-3);
-
+    normalize_obstacle_runtime(candidate.runtime);
+    const bool recreate = needs_interface_recreation(candidate);
     p_ = candidate;
-    runtime_.set_config(p_.runtime);
-    recreate_interfaces(is_primary_active(*this));
+    apply_runtime_config();
+    if (recreate) {
+      recreate_interfaces(is_primary_active(*this));
+    }
 
     RCLCPP_INFO(
       get_logger(),

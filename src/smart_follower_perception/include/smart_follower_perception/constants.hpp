@@ -6,7 +6,7 @@ namespace smart_follower_perception
 constexpr int kStateDim = 8;
 constexpr int kMeasureDim = 4;
 constexpr int kFeatureDim = 512;
-constexpr char kRuntimeVersion[] = "beta-0.4.0";
+constexpr char kRuntimeVersion[] = "beta-0.5.0";
 
 }  // namespace smart_follower_perception
 

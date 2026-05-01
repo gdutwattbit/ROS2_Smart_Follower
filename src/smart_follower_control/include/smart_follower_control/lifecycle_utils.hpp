@@ -59,8 +59,34 @@ int run_lifecycle_node(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<NodeT>();
-  node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
-  node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE);
+  const auto configured_state = node->trigger_transition(
+    lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
+  if (configured_state.id() != lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE ||
+    node->get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE)
+  {
+    RCLCPP_ERROR(
+      node->get_logger(),
+      "Lifecycle configure failed. current_state=%s returned_state=%s",
+      node->get_current_state().label().c_str(),
+      configured_state.label().c_str());
+    rclcpp::shutdown();
+    return 1;
+  }
+
+  const auto activated_state = node->trigger_transition(
+    lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE);
+  if (activated_state.id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE ||
+    node->get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE)
+  {
+    RCLCPP_ERROR(
+      node->get_logger(),
+      "Lifecycle activate failed. current_state=%s returned_state=%s",
+      node->get_current_state().label().c_str(),
+      activated_state.label().c_str());
+    rclcpp::shutdown();
+    return 1;
+  }
+
   rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node->get_node_base_interface());
   exec.spin();

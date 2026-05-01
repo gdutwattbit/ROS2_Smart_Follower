@@ -18,6 +18,53 @@
 namespace smart_follower_control
 {
 
+namespace
+{
+void declare_follower_parameters(rclcpp_lifecycle::LifecycleNode & node)
+{
+  node.declare_parameter("person_pose_topic", std::string("person_pose"));
+  node.declare_parameter("cmd_vel_follow_topic", std::string("cmd_vel_follow"));
+  node.declare_parameter("control_rate", 20.0);
+  node.declare_parameter("target_distance", 1.0);
+  node.declare_parameter("theta_deadzone", 0.03);
+  node.declare_parameter("stop_hold.distance", 0.05);
+  node.declare_parameter("stop_hold.angle", 0.10);
+  node.declare_parameter("stop_hold.speed_mps", 0.12);
+  node.declare_parameter("target_timeout", 0.4);
+  node.declare_parameter("prediction_horizon_s", 0.25);
+  node.declare_parameter("velocity_ema_alpha", 0.70);
+  node.declare_parameter("pid_r.kp", 0.8);
+  node.declare_parameter("pid_r.ki", 0.0);
+  node.declare_parameter("pid_r.kd", 0.1);
+  node.declare_parameter("pid_t.kp", 1.2);
+  node.declare_parameter("pid_t.ki", 0.0);
+  node.declare_parameter("pid_t.kd", 0.1);
+  node.declare_parameter("pid_i_limit", 0.5);
+  node.declare_parameter("pid_kaw", 0.2);
+  node.declare_parameter("limits.v_max", 0.6);
+  node.declare_parameter("limits.w_max", 1.2);
+  node.declare_parameter("limits.dv_max", 0.5);
+  node.declare_parameter("limits.dw_max", 1.5);
+}
+
+void normalize_follower_runtime(FollowerRuntimeConfig & config)
+{
+  config.control_rate = clamp_rate_hz(config.control_rate);
+  config.theta_deadzone = clamp_non_negative(config.theta_deadzone);
+  config.stop_hold_distance = clamp_non_negative(config.stop_hold_distance);
+  config.stop_hold_angle = clamp_non_negative(config.stop_hold_angle);
+  config.stop_hold_speed_mps = clamp_non_negative(config.stop_hold_speed_mps);
+  config.target_timeout = clamp_non_negative(config.target_timeout);
+  config.prediction_horizon_s = clamp_non_negative(config.prediction_horizon_s);
+  config.velocity_ema_alpha = std::clamp(config.velocity_ema_alpha, 0.0, 1.0);
+  config.i_limit = clamp_non_negative(config.i_limit);
+  config.v_max = clamp_non_negative(config.v_max);
+  config.w_max = clamp_non_negative(config.w_max);
+  config.dv_max = clamp_non_negative(config.dv_max);
+  config.dw_max = clamp_non_negative(config.dw_max);
+}
+}  // namespace
+
 class FollowerControllerNode : public rclcpp_lifecycle::LifecycleNode
 {
 public:
@@ -26,29 +73,7 @@ public:
   FollowerControllerNode()
   : rclcpp_lifecycle::LifecycleNode("follower_controller_node")
   {
-    declare_parameter("person_pose_topic", std::string("person_pose"));
-    declare_parameter("cmd_vel_follow_topic", std::string("cmd_vel_follow"));
-    declare_parameter("control_rate", 20.0);
-    declare_parameter("target_distance", 1.0);
-    declare_parameter("theta_deadzone", 0.03);
-    declare_parameter("stop_hold.distance", 0.05);
-    declare_parameter("stop_hold.angle", 0.10);
-    declare_parameter("stop_hold.speed_mps", 0.12);
-    declare_parameter("target_timeout", 0.4);
-    declare_parameter("prediction_horizon_s", 0.25);
-    declare_parameter("velocity_ema_alpha", 0.70);
-    declare_parameter("pid_r.kp", 0.8);
-    declare_parameter("pid_r.ki", 0.0);
-    declare_parameter("pid_r.kd", 0.1);
-    declare_parameter("pid_t.kp", 1.2);
-    declare_parameter("pid_t.ki", 0.0);
-    declare_parameter("pid_t.kd", 0.1);
-    declare_parameter("pid_i_limit", 0.5);
-    declare_parameter("pid_kaw", 0.2);
-    declare_parameter("limits.v_max", 0.6);
-    declare_parameter("limits.w_max", 1.2);
-    declare_parameter("limits.dv_max", 0.5);
-    declare_parameter("limits.dw_max", 1.5);
+    declare_follower_parameters(*this);
   }
 
 private:
@@ -65,6 +90,18 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
   diagnostic_updater::Updater diagnostics_{this};
   FollowerRuntime runtime_;
+
+  void apply_runtime_config()
+  {
+    runtime_.set_config(p_.runtime);
+  }
+
+  bool needs_interface_recreation(const Params & next) const
+  {
+    return next.person_pose_topic != p_.person_pose_topic ||
+           next.cmd_vel_follow_topic != p_.cmd_vel_follow_topic ||
+           next.runtime.control_rate != p_.runtime.control_rate;
+  }
 
   void load_parameters()
   {
@@ -91,7 +128,15 @@ private:
     p_.runtime.w_max = get_parameter("limits.w_max").as_double();
     p_.runtime.dv_max = get_parameter("limits.dv_max").as_double();
     p_.runtime.dw_max = get_parameter("limits.dw_max").as_double();
-    runtime_.set_config(p_.runtime);
+    normalize_follower_runtime(p_.runtime);
+    apply_runtime_config();
+  }
+
+  void on_pose_message(const smart_follower_msgs::msg::PersonPoseArray::SharedPtr msg)
+  {
+    if (msg) {
+      runtime_.on_pose(*msg);
+    }
   }
 
   void recreate_interfaces(bool preserve_activation)
@@ -107,11 +152,7 @@ private:
     pose_sub_ = create_subscription<smart_follower_msgs::msg::PersonPoseArray>(
       p_.person_pose_topic,
       10,
-      [this](const smart_follower_msgs::msg::PersonPoseArray::SharedPtr msg) {
-        if (msg) {
-          runtime_.on_pose(*msg);
-        }
-      });
+      std::bind(&FollowerControllerNode::on_pose_message, this, std::placeholders::_1));
 
     timer_ = create_wall_timer(
       hz_to_period(p_.runtime.control_rate), std::bind(&FollowerControllerNode::on_timer, this));
@@ -189,23 +230,13 @@ private:
       apply_parameter_override(candidate, param);
     }
 
-    candidate.runtime.control_rate = clamp_rate_hz(candidate.runtime.control_rate);
-    candidate.runtime.theta_deadzone = clamp_non_negative(candidate.runtime.theta_deadzone);
-    candidate.runtime.stop_hold_distance = clamp_non_negative(candidate.runtime.stop_hold_distance);
-    candidate.runtime.stop_hold_angle = clamp_non_negative(candidate.runtime.stop_hold_angle);
-    candidate.runtime.stop_hold_speed_mps = clamp_non_negative(candidate.runtime.stop_hold_speed_mps);
-    candidate.runtime.target_timeout = clamp_non_negative(candidate.runtime.target_timeout);
-    candidate.runtime.prediction_horizon_s = clamp_non_negative(candidate.runtime.prediction_horizon_s);
-    candidate.runtime.velocity_ema_alpha = std::clamp(candidate.runtime.velocity_ema_alpha, 0.0, 1.0);
-    candidate.runtime.i_limit = clamp_non_negative(candidate.runtime.i_limit);
-    candidate.runtime.v_max = clamp_non_negative(candidate.runtime.v_max);
-    candidate.runtime.w_max = clamp_non_negative(candidate.runtime.w_max);
-    candidate.runtime.dv_max = clamp_non_negative(candidate.runtime.dv_max);
-    candidate.runtime.dw_max = clamp_non_negative(candidate.runtime.dw_max);
-
+    normalize_follower_runtime(candidate.runtime);
+    const bool recreate = needs_interface_recreation(candidate);
     p_ = candidate;
-    runtime_.set_config(p_.runtime);
-    recreate_interfaces(is_primary_active(*this));
+    apply_runtime_config();
+    if (recreate) {
+      recreate_interfaces(is_primary_active(*this));
+    }
 
     RCLCPP_INFO(
       get_logger(),

@@ -19,6 +19,33 @@
 namespace smart_follower_control
 {
 
+namespace
+{
+constexpr const char * kDeprecatedArbiterParameters[] = {
+  "lost_time_normal_max",
+  "lost_time_degraded_max",
+  "lost_time_search_max",
+  "degraded_linear_scale",
+  "search_angular_speed",
+};
+
+bool contains_parameter(
+  const std::vector<rclcpp::Parameter> & params,
+  const char * name)
+{
+  return std::any_of(params.begin(), params.end(), [name](const rclcpp::Parameter & param) {
+    return param.get_name() == name;
+  });
+}
+
+bool has_startup_override(
+  const rclcpp::NodeOptions & options,
+  const char * name)
+{
+  return contains_parameter(options.parameter_overrides(), name);
+}
+}  // namespace
+
 class ArbiterNode : public rclcpp_lifecycle::LifecycleNode
 {
 public:
@@ -69,6 +96,22 @@ private:
   diagnostic_updater::Updater diagnostics_{this};
   ArbiterRuntime runtime_;
 
+  void warn_deprecated_arbiter_parameters(const std::vector<rclcpp::Parameter> & overrides = {})
+  {
+    for (const char * name : kDeprecatedArbiterParameters) {
+      const bool present = overrides.empty() ?
+        has_startup_override(get_node_options(), name) :
+        contains_parameter(overrides, name);
+      if (present) {
+        RCLCPP_WARN(
+          get_logger(),
+          "[%s] arbiter parameter '%s' is deprecated and ignored. Arbiter now uses STOP/FOLLOW/AVOID only.",
+          kRuntimeVersion,
+          name);
+      }
+    }
+  }
+
   void load_parameters()
   {
     p_.person_pose_topic = get_parameter("person_pose_topic").as_string();
@@ -77,12 +120,6 @@ private:
     p_.follow_command_topic = get_parameter("follow_command_topic").as_string();
     p_.cmd_vel_topic = get_parameter("cmd_vel_topic").as_string();
     p_.publish_rate = get_parameter("publish_rate").as_double();
-
-    p_.runtime.thresholds.lost_time_normal_max = get_parameter("lost_time_normal_max").as_double();
-    p_.runtime.thresholds.lost_time_degraded_max = get_parameter("lost_time_degraded_max").as_double();
-    p_.runtime.thresholds.lost_time_search_max = get_parameter("lost_time_search_max").as_double();
-    p_.runtime.degraded_linear_scale = get_parameter("degraded_linear_scale").as_double();
-    p_.runtime.search_angular_speed = get_parameter("search_angular_speed").as_double();
     p_.runtime.avoid_enter_threshold = get_parameter("avoid_enter_threshold").as_int();
     p_.runtime.avoid_exit_threshold = get_parameter("avoid_exit_threshold").as_int();
     p_.runtime.avoid_exit_hysteresis_time = get_parameter("avoid_exit_hysteresis_time").as_double();
@@ -90,6 +127,16 @@ private:
     p_.runtime.avoid_nonzero_epsilon = get_parameter("avoid_nonzero_epsilon").as_double();
 
     runtime_.set_config(p_.runtime);
+  }
+
+  bool needs_interface_recreation(const Params & next) const
+  {
+    return next.person_pose_topic != p_.person_pose_topic ||
+           next.cmd_vel_follow_topic != p_.cmd_vel_follow_topic ||
+           next.cmd_vel_avoid_topic != p_.cmd_vel_avoid_topic ||
+           next.follow_command_topic != p_.follow_command_topic ||
+           next.cmd_vel_topic != p_.cmd_vel_topic ||
+           next.publish_rate != p_.publish_rate;
   }
 
   void recreate_interfaces(bool preserve_activation)
@@ -146,6 +193,7 @@ private:
   CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
   {
     load_parameters();
+    warn_deprecated_arbiter_parameters();
     recreate_interfaces(false);
 
     diagnostics_.setHardwareID("smart_follower_arbiter");
@@ -191,11 +239,6 @@ private:
     else if (name == "follow_command_topic") target.follow_command_topic = param.as_string();
     else if (name == "cmd_vel_topic") target.cmd_vel_topic = param.as_string();
     else if (name == "publish_rate") target.publish_rate = param.as_double();
-    else if (name == "lost_time_normal_max") target.runtime.thresholds.lost_time_normal_max = param.as_double();
-    else if (name == "lost_time_degraded_max") target.runtime.thresholds.lost_time_degraded_max = param.as_double();
-    else if (name == "lost_time_search_max") target.runtime.thresholds.lost_time_search_max = param.as_double();
-    else if (name == "degraded_linear_scale") target.runtime.degraded_linear_scale = param.as_double();
-    else if (name == "search_angular_speed") target.runtime.search_angular_speed = param.as_double();
     else if (name == "avoid_enter_threshold") target.runtime.avoid_enter_threshold = param.as_int();
     else if (name == "avoid_exit_threshold") target.runtime.avoid_exit_threshold = param.as_int();
     else if (name == "avoid_exit_hysteresis_time") target.runtime.avoid_exit_hysteresis_time = param.as_double();
@@ -211,15 +254,6 @@ private:
     }
 
     candidate.publish_rate = clamp_rate_hz(candidate.publish_rate);
-    candidate.runtime.thresholds.lost_time_normal_max = clamp_non_negative(
-      candidate.runtime.thresholds.lost_time_normal_max);
-    candidate.runtime.thresholds.lost_time_degraded_max = std::max(
-      candidate.runtime.thresholds.lost_time_normal_max,
-      candidate.runtime.thresholds.lost_time_degraded_max);
-    candidate.runtime.thresholds.lost_time_search_max = std::max(
-      candidate.runtime.thresholds.lost_time_degraded_max,
-      candidate.runtime.thresholds.lost_time_search_max);
-    candidate.runtime.degraded_linear_scale = std::clamp(candidate.runtime.degraded_linear_scale, 0.0, 1.0);
     candidate.runtime.avoid_enter_threshold = clamp_int_min(candidate.runtime.avoid_enter_threshold, 1);
     candidate.runtime.avoid_exit_threshold = clamp_int_min(candidate.runtime.avoid_exit_threshold, 1);
     candidate.runtime.avoid_exit_hysteresis_time = clamp_non_negative(
@@ -227,9 +261,13 @@ private:
     candidate.runtime.avoid_cmd_timeout = clamp_non_negative(candidate.runtime.avoid_cmd_timeout);
     candidate.runtime.avoid_nonzero_epsilon = clamp_non_negative(candidate.runtime.avoid_nonzero_epsilon);
 
+    const bool recreate = needs_interface_recreation(candidate);
     p_ = candidate;
     runtime_.set_config(p_.runtime);
-    recreate_interfaces(is_primary_active(*this));
+    warn_deprecated_arbiter_parameters(params);
+    if (recreate) {
+      recreate_interfaces(is_primary_active(*this));
+    }
 
     RCLCPP_INFO(
       get_logger(),
@@ -270,6 +308,8 @@ private:
     } else if (snapshot.mode == ArbiterMode::AVOID) {
       level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
       message = "Arbiter running obstacle avoidance";
+    } else if (snapshot.mode == ArbiterMode::FOLLOW) {
+      message = "Arbiter forwarding follow command";
     }
     stat.summary(level, message);
   }

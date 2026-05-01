@@ -110,26 +110,13 @@ geometry_msgs::msg::Twist ArbiterRuntime::compute_output(const rclcpp::Time & no
   } else if (avoid_on) {
     mode_ = ArbiterMode::AVOID;
   } else {
-    // Temporarily bypass age-based degraded/search fallback and forward the
-    // follower output directly unless ESTOP or obstacle avoidance is active.
-    mode_ = ArbiterMode::FOLLOW_NORMAL;
+    mode_ = ArbiterMode::FOLLOW;
   }
 
   geometry_msgs::msg::Twist out;
   switch (mode_) {
-    case ArbiterMode::FOLLOW_NORMAL:
+    case ArbiterMode::FOLLOW:
       out = latest_follow_cmd_;
-      break;
-    case ArbiterMode::FOLLOW_DEGRADED:
-      out = latest_follow_cmd_;
-      out.linear.x *= config_.degraded_linear_scale;
-      if (!std::isfinite(out.angular.z) || std::abs(out.angular.z) < 1e-6) {
-        out.angular.z = std::clamp(last_target_theta_, -0.8, 0.8);
-      }
-      break;
-    case ArbiterMode::SEARCH:
-      out.linear.x = 0.0;
-      out.angular.z = config_.search_angular_speed;
       break;
     case ArbiterMode::AVOID:
       out = latest_avoid_cmd_;

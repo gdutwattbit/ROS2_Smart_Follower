@@ -19,18 +19,21 @@ def generate_launch_description():
     camera_depth_registration = LaunchConfiguration('camera_depth_registration')
     camera_enable_d2c_viewer = LaunchConfiguration('camera_enable_d2c_viewer')
     camera_enable_ir = LaunchConfiguration('camera_enable_ir')
+    yolo_model = LaunchConfiguration('yolo_model')
+    reid_model = LaunchConfiguration('reid_model')
+    control_debug_params = LaunchConfiguration('control_debug_params')
 
     wheeltec_share = get_package_share_directory('turn_on_wheeltec_robot')
     astra_share = get_package_share_directory('astra_camera')
     bringup_share = get_package_share_directory('smart_follower_bringup')
-    workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(bringup_share))))
-    model_dir = os.path.join(workspace_root, 'models')
-    yolo_model = os.path.join(model_dir, 'yolo26n_static_256x320_simplify_e2e_int8.onnx')
-    reid_model = os.path.join(model_dir, 'osnet_x0_5_512.onnx')
+    model_dir = os.path.join(bringup_share, 'models')
+    default_yolo_model = os.path.join(model_dir, 'yolo26n_static_256x320_simplify_e2e_int8.onnx')
+    default_reid_model = os.path.join(model_dir, 'osnet_x0_5_512.onnx')
     control_share = get_package_share_directory('smart_follower_control')
 
     perception_params = os.path.join(bringup_share, 'config', 'perception_params.yaml')
     control_params = os.path.join(control_share, 'config', 'control_params.yaml')
+    control_debug_overlay = os.path.join(control_share, 'config', 'control_params_robot1_debug.yaml')
 
     wheeltec_robot = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(wheeltec_share, 'launch', 'turn_on_wheeltec_robot.launch.py')),
@@ -65,35 +68,35 @@ def generate_launch_description():
             executable='follower_controller_node',
             name='follower_controller_node',
             output='screen',
-            parameters=[control_params],
+            parameters=[control_params, control_debug_params],
         ),
         Node(
             package='smart_follower_control',
             executable='ultrasonic_range_node',
             name='ultrasonic_range_node',
             output='screen',
-            parameters=[control_params],
+            parameters=[control_params, control_debug_params],
         ),
         Node(
             package='smart_follower_control',
             executable='obstacle_avoidance_node',
             name='obstacle_avoidance_node',
             output='screen',
-            parameters=[control_params],
+            parameters=[control_params, control_debug_params],
         ),
         Node(
             package='smart_follower_control',
             executable='arbiter_node',
             name='arbiter_node',
             output='screen',
-            parameters=[control_params],
+            parameters=[control_params, control_debug_params],
         ),
         Node(
             package='smart_follower_control',
             executable='keyboard_command_node',
             name='keyboard_command_node',
             output='screen',
-            parameters=[control_params],
+            parameters=[control_params, control_debug_params],
         ),
     ])
 
@@ -107,6 +110,9 @@ def generate_launch_description():
         DeclareLaunchArgument('camera_depth_registration', default_value='true'),
         DeclareLaunchArgument('camera_enable_d2c_viewer', default_value='false'),
         DeclareLaunchArgument('camera_enable_ir', default_value='false'),
+        DeclareLaunchArgument('yolo_model', default_value=default_yolo_model),
+        DeclareLaunchArgument('reid_model', default_value=default_reid_model),
+        DeclareLaunchArgument('control_debug_params', default_value=control_debug_overlay),
         wheeltec_robot,
         astra_camera,
         follower_group,

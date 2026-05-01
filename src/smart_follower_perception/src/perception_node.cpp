@@ -121,6 +121,78 @@ private:
       params_.reid_ort);
   }
 
+  bool needs_interface_recreation(const PerceptionParams & next) const
+  {
+    return next.color_topic != params_.color_topic ||
+           next.depth_topic != params_.depth_topic ||
+           next.person_pose_topic != params_.person_pose_topic ||
+           next.follow_command_topic != params_.follow_command_topic;
+  }
+
+  bool needs_model_reconfiguration(const PerceptionParams & next) const
+  {
+    return next.yolo_model_path != params_.yolo_model_path ||
+           next.yolo_input_w != params_.yolo_input_w ||
+           next.yolo_input_h != params_.yolo_input_h ||
+           next.person_class_id != params_.person_class_id ||
+           next.yolo_conf_threshold != params_.yolo_conf_threshold ||
+           next.yolo_ort.intra_op_num_threads != params_.yolo_ort.intra_op_num_threads ||
+           next.yolo_ort.inter_op_num_threads != params_.yolo_ort.inter_op_num_threads ||
+           next.yolo_ort.execution_mode_parallel != params_.yolo_ort.execution_mode_parallel ||
+           next.reid_model_path != params_.reid_model_path ||
+           next.reid_input_w != params_.reid_input_w ||
+           next.reid_input_h != params_.reid_input_h ||
+           next.reid_ort.intra_op_num_threads != params_.reid_ort.intra_op_num_threads ||
+           next.reid_ort.inter_op_num_threads != params_.reid_ort.inter_op_num_threads ||
+           next.reid_ort.execution_mode_parallel != params_.reid_ort.execution_mode_parallel;
+  }
+
+  bool needs_intrinsics_refresh(const PerceptionParams & next) const
+  {
+    return !stats_.intrinsics_ready || next.camera.info_service != params_.camera.info_service;
+  }
+
+  bool is_active()
+  {
+    return this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
+  }
+
+  void stop_runtime_processing(bool cancel_timer)
+  {
+    if (cancel_timer && result_timer_) {
+      result_timer_->cancel();
+    }
+    pipeline_.stop_detection_worker();
+    pipeline_.clear_async_state();
+  }
+
+  void restart_runtime_processing_if_active(bool was_active)
+  {
+    if (!was_active) {
+      return;
+    }
+    pipeline_.start_detection_worker();
+    if (result_timer_) {
+      result_timer_->reset();
+    }
+  }
+
+  rcl_interfaces::msg::SetParametersResult make_parameter_failure_result(const std::string & reason)
+  {
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = false;
+    result.reason = reason;
+    return result;
+  }
+
+  rcl_interfaces::msg::SetParametersResult make_parameter_success_result()
+  {
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
+    result.reason = "ok";
+    return result;
+  }
+
   void sync_intrinsics_diagnostics()
   {
     stats_.intrinsics_ready = is_valid_camera_intrinsics(camera_intrinsics_);
@@ -150,6 +222,21 @@ private:
     }
   }
 
+  void log_intrinsics_retry_summary(
+    const char * outcome,
+    int attempts,
+    int max_attempts) const
+  {
+    RCLCPP_WARN(
+      get_logger(),
+      "[%s] camera intrinsics service %s: %s after %d/%d attempts",
+      kRuntimeVersion,
+      outcome,
+      params_.camera.info_service.c_str(),
+      attempts,
+      max_attempts);
+  }
+
   bool try_configure_intrinsics_from_service(bool log_result)
   {
     using GetCameraInfo = astra_camera_msgs::srv::GetCameraInfo;
@@ -171,17 +258,13 @@ private:
     executor.add_node(helper);
 
     bool success = false;
+    bool saw_service_unavailable = false;
+    bool saw_request_timeout = false;
+    bool saw_service_failure = false;
+    bool saw_invalid_calibration = false;
     for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
       if (!client->wait_for_service(kServiceWaitTimeout)) {
-        if (log_result) {
-          RCLCPP_WARN(
-            get_logger(),
-            "[%s] camera intrinsics service unavailable: %s (attempt %d/%d)",
-            kRuntimeVersion,
-            params_.camera.info_service.c_str(),
-            attempt,
-            kMaxAttempts);
-        }
+        saw_service_unavailable = true;
         if (attempt < kMaxAttempts) {
           std::this_thread::sleep_for(kRetryDelay);
         }
@@ -193,15 +276,7 @@ private:
       const auto status = executor.spin_until_future_complete(future, kRequestTimeout);
 
       if (status != rclcpp::FutureReturnCode::SUCCESS) {
-        if (log_result) {
-          RCLCPP_WARN(
-            get_logger(),
-            "[%s] camera intrinsics service timed out: %s (attempt %d/%d)",
-            kRuntimeVersion,
-            params_.camera.info_service.c_str(),
-            attempt,
-            kMaxAttempts);
-        }
+        saw_request_timeout = true;
         if (attempt < kMaxAttempts) {
           std::this_thread::sleep_for(kRetryDelay);
         }
@@ -210,16 +285,7 @@ private:
 
       const auto response = future.get();
       if (!response || !response->success) {
-        if (log_result) {
-          RCLCPP_WARN(
-            get_logger(),
-            "[%s] camera intrinsics service failed: %s message=%s (attempt %d/%d)",
-            kRuntimeVersion,
-            params_.camera.info_service.c_str(),
-            response ? response->message.c_str() : "null response",
-            attempt,
-            kMaxAttempts);
-        }
+        saw_service_failure = true;
         if (attempt < kMaxAttempts) {
           std::this_thread::sleep_for(kRetryDelay);
         }
@@ -228,15 +294,7 @@ private:
 
       const auto intrinsics = camera_info_to_intrinsics(response->info);
       if (!is_valid_camera_intrinsics(intrinsics)) {
-        if (log_result) {
-          RCLCPP_WARN(
-            get_logger(),
-            "[%s] camera intrinsics service returned invalid calibration: %s (attempt %d/%d)",
-            kRuntimeVersion,
-            params_.camera.info_service.c_str(),
-            attempt,
-            kMaxAttempts);
-        }
+        saw_invalid_calibration = true;
         if (attempt < kMaxAttempts) {
           std::this_thread::sleep_for(kRetryDelay);
         }
@@ -245,16 +303,34 @@ private:
 
       set_intrinsics(intrinsics, "service", false);
       if (log_result) {
-        RCLCPP_INFO(
-          get_logger(),
-          "[%s] camera intrinsics loaded from service on attempt %d/%d.",
-          kRuntimeVersion,
-          attempt,
-          kMaxAttempts);
-        set_intrinsics(camera_intrinsics_, intrinsics_source_, true);
+        if (attempt > 1) {
+          RCLCPP_INFO(
+            get_logger(),
+            "[%s] camera intrinsics loaded from service after %d/%d attempts.",
+            kRuntimeVersion,
+            attempt,
+            kMaxAttempts);
+        } else {
+          RCLCPP_INFO(
+            get_logger(),
+            "[%s] camera intrinsics loaded from service.",
+            kRuntimeVersion);
+        }
       }
       success = true;
       break;
+    }
+
+    if (!success && log_result) {
+      if (saw_service_unavailable) {
+        log_intrinsics_retry_summary("unavailable", kMaxAttempts, kMaxAttempts);
+      } else if (saw_request_timeout) {
+        log_intrinsics_retry_summary("timed out", kMaxAttempts, kMaxAttempts);
+      } else if (saw_service_failure) {
+        log_intrinsics_retry_summary("returned failure", kMaxAttempts, kMaxAttempts);
+      } else if (saw_invalid_calibration) {
+        log_intrinsics_retry_summary("returned invalid calibration", kMaxAttempts, kMaxAttempts);
+      }
     }
 
     executor.remove_node(helper);
@@ -384,7 +460,7 @@ private:
 
   void on_worker_result_timer()
   {
-    if (this->get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+    if (!is_active()) {
       return;
     }
 
@@ -417,47 +493,43 @@ private:
     for (const auto & parameter : parameters) {
       ::smart_follower_perception::apply_parameter_override(candidate, parameter);
     }
-    const bool was_active =
-      this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
+    const bool was_active = is_active();
     const auto previous_params = params_;
+    const bool should_recreate_interfaces = needs_interface_recreation(candidate);
+    const bool reconfigure_models = needs_model_reconfiguration(candidate);
+    const bool refresh_intrinsics = needs_intrinsics_refresh(candidate);
+
+    stop_runtime_processing(was_active);
 
     params_ = candidate;
     configure_modules_from_params();
-    configure_models();
-    if (!refresh_camera_intrinsics(true)) {
+    if (reconfigure_models) {
+      configure_models();
+    }
+    if (refresh_intrinsics && !refresh_camera_intrinsics(true)) {
       params_ = previous_params;
       configure_modules_from_params();
-      configure_models();
-      refresh_camera_intrinsics(false);
-      rcl_interfaces::msg::SetParametersResult result;
-      result.successful = false;
-      result.reason = "camera intrinsics service unavailable";
-      return result;
-    }
-
-    if (was_active && result_timer_) {
-      result_timer_->cancel();
-    }
-    pipeline_.stop_detection_worker();
-    pipeline_.clear_async_state();
-    recreate_interfaces(was_active);
-
-    if (was_active) {
-      pipeline_.start_detection_worker();
-      if (result_timer_) {
-        result_timer_->reset();
+      if (reconfigure_models) {
+        configure_models();
       }
+      if (refresh_intrinsics) {
+        refresh_camera_intrinsics(false);
+      }
+      restart_runtime_processing_if_active(was_active);
+      return make_parameter_failure_result("camera intrinsics service unavailable");
     }
+    if (should_recreate_interfaces) {
+      recreate_interfaces(was_active);
+    }
+
+    restart_runtime_processing_if_active(was_active);
 
     RCLCPP_INFO(
       get_logger(),
       "[%s] perception parameters hot-reloaded, runtime continuing.",
       kRuntimeVersion);
 
-    rcl_interfaces::msg::SetParametersResult result;
-    result.successful = true;
-    result.reason = "ok";
-    return result;
+    return make_parameter_success_result();
   }
 
   CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
@@ -502,20 +574,13 @@ private:
       person_pub_->on_activate();
     }
     pipeline_.clear_async_state();
-    pipeline_.start_detection_worker();
-    if (result_timer_) {
-      result_timer_->reset();
-    }
+    restart_runtime_processing_if_active(true);
     return CallbackReturn::SUCCESS;
   }
 
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override
   {
-    if (result_timer_) {
-      result_timer_->cancel();
-    }
-    pipeline_.stop_detection_worker();
-    pipeline_.clear_async_state();
+    stop_runtime_processing(true);
     if (person_pub_) {
       person_pub_->on_deactivate();
     }

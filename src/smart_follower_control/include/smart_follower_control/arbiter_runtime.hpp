@@ -12,10 +12,6 @@ namespace smart_follower_control
 
 struct ArbiterRuntimeConfig
 {
-  ArbiterThresholds thresholds;
-  double degraded_linear_scale{0.5};
-  double search_angular_speed{0.3};
-
   int avoid_enter_threshold{3};
   int avoid_exit_threshold{5};
   double avoid_exit_hysteresis_time{0.2};

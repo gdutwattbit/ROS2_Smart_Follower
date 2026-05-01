@@ -18,6 +18,33 @@
 namespace smart_follower_control
 {
 
+namespace
+{
+void declare_ultrasonic_parameters(rclcpp_lifecycle::LifecycleNode & node)
+{
+  node.declare_parameter("rate", 10.0);
+  node.declare_parameter("window_size", 5);
+  node.declare_parameter("max_range", 3.0);
+  node.declare_parameter("min_range", 0.03);
+  node.declare_parameter("left.trig_pin", 23);
+  node.declare_parameter("left.echo_pin", 24);
+  node.declare_parameter("right.trig_pin", 4);
+  node.declare_parameter("right.echo_pin", 14);
+  node.declare_parameter("left.topic", std::string("left_ultrasonic/range"));
+  node.declare_parameter("right.topic", std::string("right_ultrasonic/range"));
+  node.declare_parameter("frame_left", std::string("ultrasonic_left_link"));
+  node.declare_parameter("frame_right", std::string("ultrasonic_right_link"));
+}
+
+void normalize_ultrasonic_runtime(UltrasonicRuntimeConfig & config)
+{
+  config.rate = clamp_rate_hz(config.rate);
+  config.window_size = clamp_int_min(config.window_size, 1);
+  config.min_range = clamp_non_negative(config.min_range);
+  config.max_range = std::max(config.min_range, config.max_range);
+}
+}  // namespace
+
 class UltrasonicRangeNode : public rclcpp_lifecycle::LifecycleNode
 {
 public:
@@ -26,18 +53,7 @@ public:
   UltrasonicRangeNode()
   : rclcpp_lifecycle::LifecycleNode("ultrasonic_range_node")
   {
-    declare_parameter("rate", 10.0);
-    declare_parameter("window_size", 5);
-    declare_parameter("max_range", 3.0);
-    declare_parameter("min_range", 0.03);
-    declare_parameter("left.trig_pin", 23);
-    declare_parameter("left.echo_pin", 24);
-    declare_parameter("right.trig_pin", 4);
-    declare_parameter("right.echo_pin", 14);
-    declare_parameter("left.topic", std::string("left_ultrasonic/range"));
-    declare_parameter("right.topic", std::string("right_ultrasonic/range"));
-    declare_parameter("frame_left", std::string("ultrasonic_left_link"));
-    declare_parameter("frame_right", std::string("ultrasonic_right_link"));
+    declare_ultrasonic_parameters(*this);
   }
 
 private:
@@ -53,6 +69,31 @@ private:
   diagnostic_updater::Updater diagnostics_{this};
   UltrasonicRuntime runtime_;
 
+  void apply_runtime_config()
+  {
+    runtime_.set_config(p_.runtime);
+  }
+
+  bool needs_interface_recreation(const Params & next) const
+  {
+    return next.runtime.rate != p_.runtime.rate ||
+           next.runtime.left.topic != p_.runtime.left.topic ||
+           next.runtime.right.topic != p_.runtime.right.topic;
+  }
+
+  bool needs_runtime_reconfigure(const Params & next) const
+  {
+    return next.runtime.window_size != p_.runtime.window_size ||
+           next.runtime.max_range != p_.runtime.max_range ||
+           next.runtime.min_range != p_.runtime.min_range ||
+           next.runtime.left.trig_pin != p_.runtime.left.trig_pin ||
+           next.runtime.left.echo_pin != p_.runtime.left.echo_pin ||
+           next.runtime.right.trig_pin != p_.runtime.right.trig_pin ||
+           next.runtime.right.echo_pin != p_.runtime.right.echo_pin ||
+           next.runtime.left.frame != p_.runtime.left.frame ||
+           next.runtime.right.frame != p_.runtime.right.frame;
+  }
+
   void load_parameters()
   {
     p_.runtime.rate = get_parameter("rate").as_double();
@@ -67,7 +108,8 @@ private:
     p_.runtime.right.topic = get_parameter("right.topic").as_string();
     p_.runtime.left.frame = get_parameter("frame_left").as_string();
     p_.runtime.right.frame = get_parameter("frame_right").as_string();
-    runtime_.set_config(p_.runtime);
+    normalize_ultrasonic_runtime(p_.runtime);
+    apply_runtime_config();
   }
 
   void recreate_interfaces(bool preserve_activation)
@@ -162,18 +204,18 @@ private:
       apply_parameter_override(candidate, param);
     }
 
-    candidate.runtime.rate = clamp_rate_hz(candidate.runtime.rate);
-    candidate.runtime.window_size = clamp_int_min(candidate.runtime.window_size, 1);
-    candidate.runtime.min_range = clamp_non_negative(candidate.runtime.min_range);
-    candidate.runtime.max_range = std::max(candidate.runtime.min_range, candidate.runtime.max_range);
-
+    normalize_ultrasonic_runtime(candidate.runtime);
+    const bool recreate = needs_interface_recreation(candidate);
+    const bool reconfigure_runtime = needs_runtime_reconfigure(candidate);
     p_ = candidate;
-    runtime_.set_config(p_.runtime);
+    apply_runtime_config();
 
-    if (is_primary_active(*this)) {
+    if (recreate) {
+      recreate_interfaces(is_primary_active(*this));
+      log_hot_reload();
+    } else if (is_primary_active(*this) && reconfigure_runtime) {
       runtime_.request_reconfigure();
     } else {
-      recreate_interfaces(false);
       log_hot_reload();
     }
 
